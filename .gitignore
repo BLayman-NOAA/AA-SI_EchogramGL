@@ -1,0 +1,16 @@
+.venv/
+scratch/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+node_modules/
+.ruff_cache/
+src/aa_si_echogram_gl/static/
+
+# The library build output. Published from a tag, not committed.
+web/dist/

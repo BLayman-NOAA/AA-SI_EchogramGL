@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aa-si-echogram-gl"
+version = "0.0.1.dev0"
+description = "GPU echogram viewer: store builder, control plane, and web component."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+
+dependencies = [
+    "numpy",
+    "xarray>=2024.11.0",
+    "zarr>=3",
+    "dask",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "matplotlib",
+]
+
+colormaps = [
+    "matplotlib",
+]
+
+# Reading a store straight out of Google Cloud Storage with `serve --store
+# gs://...`, using the credentials the machine already has.
+gcs = [
+    "fsspec",
+    "gcsfs",
+]
+
+[project.scripts]
+aa-echogram = "aa_si_echogram_gl.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aa_si_echogram_gl"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

@@ -1,0 +1,41 @@
+{
+  "name": "aa-si-echogram-gl",
+  "type": "module",
+  "version": "0.0.1",
+  "description": "A WebGPU echogram viewer, embeddable in any application that can hand it a container and a store.",
+  "license": "SEE LICENSE IN ../LICENSE.md",
+  "sideEffects": false,
+  "files": ["dist", "src"],
+  "types": "./dist/types/index.d.ts",
+  "module": "./dist/aa-si-echogram-gl.js",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/aa-si-echogram-gl.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.types.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "layers": "depcruise src --config .dependency-cruiser.cjs"
+  },
+  "peerDependencies": {
+    "zarrita": "^0.7.4"
+  },
+  "dependencies": {
+    "zarrita": "^0.7.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@webgpu/types": "^0.1.72",
+    "dependency-cruiser": "^18.2.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11",
+    "wgsl_reflect": "^1.5.0"
+  }
+}

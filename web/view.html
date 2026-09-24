@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Echogram panel</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --panel: #1b1b1b;
+        --line: #333;
+        --text: #ddd;
+      }
+      body {
+        margin: 0;
+        background: #000;
+        color: var(--text);
+        font: 13px system-ui, sans-serif;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        height: 100vh;
+      }
+      #status {
+        padding: 6px 14px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+        color: #999;
+        font-size: 11px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #plot {
+        position: relative;
+        min-height: 0;
+      }
+      #error {
+        position: absolute;
+        inset: 12px;
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        background: #2a0f0f;
+        border: 1px solid #703030;
+        border-radius: 4px;
+        white-space: pre-wrap;
+        color: #ffb4b4;
+      }
+      #error:empty {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">waiting for a view to link to</div>
+    <div id="plot"><pre id="error"></pre></div>
+    <script type="module" src="/src/shell/viewRoute.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,444 @@
+{
+ "rangeVar": "depth",
+ "verticalRef": "depth",
+ "shape": [
+  3,
+  40,
+  32
+ ],
+ "affineDeviation": 2.857999865371697e-14,
+ "depths": [
+  {
+   "channel": 0,
+   "ping": 0,
+   "sample": 0,
+   "depth": 5.0
+  },
+  {
+   "channel": 0,
+   "ping": 0,
+   "sample": 1,
+   "depth": 5.048
+  },
+  {
+   "channel": 0,
+   "ping": 0,
+   "sample": 16,
+   "depth": 5.768
+  },
+  {
+   "channel": 0,
+   "ping": 0,
+   "sample": 31,
+   "depth": 6.4879999999999995
+  },
+  {
+   "channel": 0,
+   "ping": 7,
+   "sample": 0,
+   "depth": 3.5734152255572695
+  },
+  {
+   "channel": 0,
+   "ping": 7,
+   "sample": 1,
+   "depth": 3.625722917864962
+  },
+  {
+   "channel": 0,
+   "ping": 7,
+   "sample": 16,
+   "depth": 4.410338302480346
+  },
+  {
+   "channel": 0,
+   "ping": 7,
+   "sample": 31,
+   "depth": 5.194953687095731
+  },
+  {
+   "channel": 0,
+   "ping": 14,
+   "sample": 0,
+   "depth": 5.88167787843871
+  },
+  {
+   "channel": 0,
+   "ping": 14,
+   "sample": 1,
+   "depth": 5.938293263054095
+  },
+  {
+   "channel": 0,
+   "ping": 14,
+   "sample": 16,
+   "depth": 6.787524032284864
+  },
+  {
+   "channel": 0,
+   "ping": 14,
+   "sample": 31,
+   "depth": 7.636754801515633
+  },
+  {
+   "channel": 0,
+   "ping": 21,
+   "sample": 0,
+   "depth": 5.881677878438709
+  },
+  {
+   "channel": 0,
+   "ping": 21,
+   "sample": 1,
+   "depth": 5.942600955361786
+  },
+  {
+   "channel": 0,
+   "ping": 21,
+   "sample": 16,
+   "depth": 6.85644710920794
+  },
+  {
+   "channel": 0,
+   "ping": 21,
+   "sample": 31,
+   "depth": 7.770293263054094
+  },
+  {
+   "channel": 0,
+   "ping": 28,
+   "sample": 0,
+   "depth": 3.5734152255572695
+  },
+  {
+   "channel": 0,
+   "ping": 28,
+   "sample": 1,
+   "depth": 3.638645994788039
+  },
+  {
+   "channel": 0,
+   "ping": 28,
+   "sample": 16,
+   "depth": 4.617107533249577
+  },
+  {
+   "channel": 0,
+   "ping": 28,
+   "sample": 31,
+   "depth": 5.5955690717111155
+  },
+  {
+   "channel": 0,
+   "ping": 35,
+   "sample": 0,
+   "depth": 5.000000000000001
+  },
+  {
+   "channel": 0,
+   "ping": 35,
+   "sample": 1,
+   "depth": 5.069538461538462
+  },
+  {
+   "channel": 0,
+   "ping": 35,
+   "sample": 16,
+   "depth": 6.112615384615386
+  },
+  {
+   "channel": 0,
+   "ping": 35,
+   "sample": 31,
+   "depth": 7.155692307692309
+  },
+  {
+   "channel": 1,
+   "ping": 0,
+   "sample": 0,
+   "depth": 5.0
+  },
+  {
+   "channel": 1,
+   "ping": 0,
+   "sample": 1,
+   "depth": 5.096
+  },
+  {
+   "channel": 1,
+   "ping": 0,
+   "sample": 16,
+   "depth": 6.536
+  },
+  {
+   "channel": 1,
+   "ping": 0,
+   "sample": 31,
+   "depth": 7.976
+  },
+  {
+   "channel": 1,
+   "ping": 7,
+   "sample": 0,
+   "depth": 3.5734152255572695
+  },
+  {
+   "channel": 1,
+   "ping": 7,
+   "sample": 1,
+   "depth": 3.6780306101726543
+  },
+  {
+   "channel": 1,
+   "ping": 7,
+   "sample": 16,
+   "depth": 5.247261379403423
+  },
+  {
+   "channel": 1,
+   "ping": 7,
+   "sample": 31,
+   "depth": 6.816492148634192
+  },
+  {
+   "channel": 1,
+   "ping": 14,
+   "sample": 0,
+   "depth": 5.88167787843871
+  },
+  {
+   "channel": 1,
+   "ping": 14,
+   "sample": 1,
+   "depth": 5.9949086476694795
+  },
+  {
+   "channel": 1,
+   "ping": 14,
+   "sample": 16,
+   "depth": 7.693370186131018
+  },
+  {
+   "channel": 1,
+   "ping": 14,
+   "sample": 31,
+   "depth": 9.391831724592556
+  },
+  {
+   "channel": 1,
+   "ping": 21,
+   "sample": 0,
+   "depth": 5.881677878438709
+  },
+  {
+   "channel": 1,
+   "ping": 21,
+   "sample": 1,
+   "depth": 6.003524032284863
+  },
+  {
+   "channel": 1,
+   "ping": 21,
+   "sample": 16,
+   "depth": 7.83121633997717
+  },
+  {
+   "channel": 1,
+   "ping": 21,
+   "sample": 31,
+   "depth": 9.658908647669477
+  },
+  {
+   "channel": 1,
+   "ping": 28,
+   "sample": 0,
+   "depth": 3.5734152255572695
+  },
+  {
+   "channel": 1,
+   "ping": 28,
+   "sample": 1,
+   "depth": 3.703876764018808
+  },
+  {
+   "channel": 1,
+   "ping": 28,
+   "sample": 16,
+   "depth": 5.660799840941885
+  },
+  {
+   "channel": 1,
+   "ping": 28,
+   "sample": 31,
+   "depth": 7.6177229178649615
+  },
+  {
+   "channel": 1,
+   "ping": 35,
+   "sample": 0,
+   "depth": 5.000000000000001
+  },
+  {
+   "channel": 1,
+   "ping": 35,
+   "sample": 1,
+   "depth": 5.1390769230769235
+  },
+  {
+   "channel": 1,
+   "ping": 35,
+   "sample": 16,
+   "depth": 7.22523076923077
+  },
+  {
+   "channel": 1,
+   "ping": 35,
+   "sample": 31,
+   "depth": 9.311384615384616
+  },
+  {
+   "channel": 2,
+   "ping": 0,
+   "sample": 0,
+   "depth": 5.0
+  },
+  {
+   "channel": 2,
+   "ping": 0,
+   "sample": 1,
+   "depth": 5.192
+  },
+  {
+   "channel": 2,
+   "ping": 0,
+   "sample": 16,
+   "depth": 8.072
+  },
+  {
+   "channel": 2,
+   "ping": 0,
+   "sample": 31,
+   "depth": 10.952
+  },
+  {
+   "channel": 2,
+   "ping": 7,
+   "sample": 0,
+   "depth": 3.5734152255572695
+  },
+  {
+   "channel": 2,
+   "ping": 7,
+   "sample": 1,
+   "depth": 3.7826459947880386
+  },
+  {
+   "channel": 2,
+   "ping": 7,
+   "sample": 16,
+   "depth": 6.921107533249577
+  },
+  {
+   "channel": 2,
+   "ping": 7,
+   "sample": 31,
+   "depth": 10.059569071711115
+  },
+  {
+   "channel": 2,
+   "ping": 14,
+   "sample": 0,
+   "depth": 5.88167787843871
+  },
+  {
+   "channel": 2,
+   "ping": 14,
+   "sample": 1,
+   "depth": 6.108139416900248
+  },
+  {
+   "channel": 2,
+   "ping": 14,
+   "sample": 16,
+   "depth": 9.505062493823326
+  },
+  {
+   "channel": 2,
+   "ping": 14,
+   "sample": 31,
+   "depth": 12.901985570746403
+  },
+  {
+   "channel": 2,
+   "ping": 21,
+   "sample": 0,
+   "depth": 5.881677878438709
+  },
+  {
+   "channel": 2,
+   "ping": 21,
+   "sample": 1,
+   "depth": 6.125370186131017
+  },
+  {
+   "channel": 2,
+   "ping": 21,
+   "sample": 16,
+   "depth": 9.780754801515632
+  },
+  {
+   "channel": 2,
+   "ping": 21,
+   "sample": 31,
+   "depth": 13.436139416900247
+  },
+  {
+   "channel": 2,
+   "ping": 28,
+   "sample": 0,
+   "depth": 3.5734152255572695
+  },
+  {
+   "channel": 2,
+   "ping": 28,
+   "sample": 1,
+   "depth": 3.8343383024803463
+  },
+  {
+   "channel": 2,
+   "ping": 28,
+   "sample": 16,
+   "depth": 7.7481844563265
+  },
+  {
+   "channel": 2,
+   "ping": 28,
+   "sample": 31,
+   "depth": 11.662030610172653
+  },
+  {
+   "channel": 2,
+   "ping": 35,
+   "sample": 0,
+   "depth": 5.000000000000001
+  },
+  {
+   "channel": 2,
+   "ping": 35,
+   "sample": 1,
+   "depth": 5.278153846153847
+  },
+  {
+   "channel": 2,
+   "ping": 35,
+   "sample": 16,
+   "depth": 9.45046153846154
+  },
+  {
+   "channel": 2,
+   "ping": 35,
+   "sample": 31,
+   "depth": 13.622769230769233
+  }
+ ]
+}

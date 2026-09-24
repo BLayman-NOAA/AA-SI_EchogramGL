@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Echogram viewer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --panel: #1b1b1b;
+        --line: #333;
+        --text: #ddd;
+      }
+      body {
+        margin: 0;
+        background: #000;
+        color: var(--text);
+        font: 13px system-ui, sans-serif;
+        display: grid;
+        grid-template-rows: auto auto auto 1fr;
+        height: 100vh;
+      }
+      form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: end;
+        padding: 10px 14px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        font-size: 11px;
+        text-transform: lowercase;
+        color: #999;
+      }
+      /* A control that cannot do anything says so before it is reached for.
+         The browser greys the select itself; this carries it to the caption,
+         which is the part that is actually read. */
+      label:has(select:disabled) {
+        opacity: 0.4;
+      }
+      input,
+      select,
+      button {
+        font: inherit;
+        background: #111;
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        padding: 4px 6px;
+      }
+      input[type='number'] {
+        width: 5.5em;
+      }
+      #url {
+        width: 22em;
+      }
+      #axes input {
+        width: 7em;
+      }
+      #axes .slider {
+        /* The exaggeration slider is the only continuous control here, and it
+           spans four and a half decades, so travel is what makes it usable. */
+        min-width: 30em;
+      }
+      #axes input[type='range'] {
+        width: 100%;
+        padding: 0;
+      }
+      #exaggerationValue {
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+      }
+      #layers {
+        gap: 6px;
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .layer {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .layer input[type='range'] {
+        width: 9em;
+        padding: 0;
+      }
+      .layer input.clim {
+        width: 4.5em;
+      }
+      .opacityValue {
+        width: 3em;
+        color: #999;
+        font-variant-numeric: tabular-nums;
+      }
+      #plot {
+        position: relative;
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      #boundsNote {
+        color: #d8a657;
+        align-self: center;
+      }
+      button {
+        cursor: pointer;
+      }
+      #plot {
+        position: relative;
+        min-height: 0;
+      }
+      #stats {
+        padding: 4px 14px;
+        font-size: 11px;
+        color: #9c9;
+        font-variant-numeric: tabular-nums;
+      }
+      #stats:empty {
+        display: none;
+      }
+      #status {
+        position: absolute;
+        left: 10px;
+        bottom: 8px;
+        color: #888;
+        pointer-events: none;
+      }
+      #error {
+        position: absolute;
+        inset: 12px;
+        display: none;
+        overflow: auto;
+        padding: 12px 14px;
+        background: rgba(40, 0, 0, 0.92);
+        border: 1px solid #883333;
+        border-radius: 4px;
+        color: #ffd9d9;
+        white-space: pre-wrap;
+        font-family: ui-monospace, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <form id="controls">
+      <label>store<input id="url" value="/store/" /></label>
+      <label>level<select id="level"></select></label>
+      <label>px/ping<select id="density"></select></label>
+      <label>colormap<select id="colormap"></select></label>
+      <label
+        >sampling<select id="filter">
+          <option value="nearest">nearest</option>
+          <option value="linear">linear</option>
+        </select></label
+      >
+      <button type="submit">load</button>
+      <button type="button" id="split">split window</button>
+      <button type="button" id="adapter">adapter</button>
+    </form>
+    <form id="layers">
+      <div class="layer">
+        <button type="button" id="addLayer">add layer</button>
+        <span id="layerNote">bottom row draws first</span>
+      </div>
+      <div id="layerList"></div>
+    </form>
+    <form id="axes">
+      <label>x axis<select id="xUnit"></select></label>
+      <label>y axis<select id="yUnit"></select></label>
+      <label>aspect<select id="aspectMode">
+          <option value="free">free</option>
+          <option value="locked">locked</option>
+        </select></label
+      >
+      <label class="slider"
+        >exaggeration <span id="exaggerationValue">1.00</span>
+        <input id="exaggeration" type="range" />
+      </label>
+      <button type="button" id="trueScale">true scale</button>
+      <button type="button" id="fitAll">fit all</button>
+      <button type="button" id="autoContrast">auto contrast</button>
+      <button type="button" id="measure">measure</button>
+      <label>x min<input id="xMin" /></label>
+      <label>x max<input id="xMax" /></label>
+      <label>y min<input id="yMin" /></label>
+      <label>y max<input id="yMax" /></label>
+      <span id="boundsNote"></span>
+    </form>
+    <div id="plot">
+      <div id="status"></div>
+      <div id="stats"></div>
+      <pre id="error"></pre>
+    </div>
+    <script type="module" src="/src/shell/dev.ts"></script>
+  </body>
+</html>
