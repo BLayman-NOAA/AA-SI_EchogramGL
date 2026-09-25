@@ -126,3 +126,15 @@ describe('filling in what is missing', () => {
     expect(parseSettings(JSON.stringify(broken)).window).toBeUndefined();
   });
 });
+
+describe('nodata color in settings', () => {
+  it('round trips a chosen color', () => {
+    const chosen = { ...settings, nodataColor: '#ff00aa' };
+    expect(parseSettings(serializeSettings(chosen)).nodataColor).toBe('#ff00aa');
+  });
+
+  it('drops a color that is not #rrggbb, so the default applies', () => {
+    const text = serializeSettings({ ...settings, nodataColor: 'red' });
+    expect(parseSettings(text).nodataColor).toBeUndefined();
+  });
+});

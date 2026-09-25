@@ -32,6 +32,7 @@ const url = element<HTMLInputElement>('url');
 const levelSelect = element<HTMLSelectElement>('level');
 const colormapSelect = element<HTMLSelectElement>('colormap');
 const filterSelect = element<HTMLSelectElement>('filter');
+const nodataInput = element<HTMLInputElement>('nodataColor');
 const densitySelect = element<HTMLSelectElement>('density');
 const statsBox = element<HTMLDivElement>('stats');
 
@@ -126,7 +127,7 @@ if (context) {
   // store already open, and reopening would refetch and throw away the view.
   // Limits live on the layer rows, since FR-9 gives each layer its own and a
   // difference wants limits an Sv layer never would.
-  const settings = [levelSelect, colormapSelect, filterSelect, densitySelect];
+  const settings = [levelSelect, colormapSelect, filterSelect, densitySelect, nodataInput];
   for (const input of settings) input.addEventListener('change', () => void apply());
   element<HTMLButtonElement>('trueScale').addEventListener('click', () => {
     aspectControls.set('locked', 1);
@@ -207,6 +208,7 @@ async function apply(hold?: 'x' | 'y', extra: { fit?: boolean } = {}) {
       pixelsPerPing: Number(densitySelect.value),
       colormap: colormapSelect.value,
       filter: filterSelect.value as GPUFilterMode,
+      nodataColor: nodataInput.value,
       layers: layerControls.read(),
       xUnit,
       yUnit,
@@ -226,6 +228,7 @@ function describe() {
   if (!info) return;
   fillLevels(info);
   densitySelect.value = String(info.pixelsPerPing);
+  nodataInput.value = info.nodataColor;
   // A store with one level has nothing for either of these to choose between.
   // Both still change the number they hold, so leaving them live makes a
   // control that answers and does nothing, which is worse than one that says
@@ -264,7 +267,8 @@ function describe() {
     `${info.valueName} level ${info.level}${chosen} x${info.factor} ` +
     `${info.layers.length} layer(s), ` +
     `${info.pings} pings by ${info.samples} samples  |  ` +
-    `${tiles.slots} slots${pending}, ${tiles.resident} resident, ` +
+    `${tiles.slots} slots${pending}, ${tiles.resident} resident ` +
+    `over ${tiles.levelsHeld} level(s), ` +
     `${(tiles.cachedBytes / (1024 * 1024)).toFixed(0)} MB cached, ` +
     `${tiles.redrawMs.toFixed(2)} ms to encode  |  ` +
     `${info.xLabel}  |  ${info.yLabel}`;

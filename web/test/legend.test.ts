@@ -82,3 +82,13 @@ describe('legend and the stack', () => {
     expect(items.map((item) => item.layer)).toEqual(['low', 'high']);
   });
 });
+
+describe('legend nodata color', () => {
+  it('uses the color the view paints with when one is given', () => {
+    const legend = legendFor(resolveLayers([{ channel: 0 }], DEFAULTS), {
+      ...CONTEXT,
+      nodataColor: [1, 0, 0],
+    });
+    expect(legend.nodata?.color).toEqual([1, 0, 0]);
+  });
+});

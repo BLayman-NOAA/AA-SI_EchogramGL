@@ -21,6 +21,8 @@ export interface ColormapDocument {
 const document = definitions as ColormapDocument;
 
 export const LUT_SIZE = document.size;
+/** The default color of a cell that holds no value, as a #rrggbb string. */
+export const NODATA_HEX = document.nodataColor;
 export const NODATA_COLOR = parseHex(document.nodataColor);
 export const NOISE_COLOR = parseHex(document.noiseColor);
 

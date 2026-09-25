@@ -26,14 +26,23 @@ export function createAxisControls(
 ): AxisControls {
   x.addEventListener('change', onChange);
   y.addEventListener('change', onChange);
+  // What the view last reported. A select with no option chosen reads as an
+  // empty string, which happens when a setting changes before the selectors
+  // have been filled from the store; the view's own units stand in then,
+  // rather than an empty unit that the view would refuse.
+  let reported: AxisSelection = { xUnit: 'pings', yUnit: 'meters' };
 
   return {
     update(info: ViewInfo) {
+      reported = { xUnit: info.xUnit, yUnit: info.yUnit };
       fill(x, info.validX, info.xUnit);
       fill(y, info.validY, info.yUnit);
     },
     read() {
-      return { xUnit: x.value as XUnit, yUnit: y.value as YUnit };
+      return {
+        xUnit: (x.value || reported.xUnit) as XUnit,
+        yUnit: (y.value || reported.yUnit) as YUnit,
+      };
     },
   };
 }

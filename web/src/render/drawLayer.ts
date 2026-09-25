@@ -456,6 +456,12 @@ export class LayerStack {
     for (const entry of this.layers) entry.tileGroups.delete(name);
   }
 
+  /** Repaint every layer's nodata cells in a new color. No compilation. */
+  setNodataColor(color: [number, number, number]) {
+    this.nodataColor = color;
+    this.refreshParams();
+  }
+
   /** What each layer draws, in stack order. A slot with no tile is skipped. */
   setDraws(passes: LayerPass[]) {
     this.passes = passes;

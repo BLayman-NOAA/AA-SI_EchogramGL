@@ -48,6 +48,8 @@ export interface LegendContext {
   unit: string;
   /** Labels present, for a categorical layer, with their colors. */
   keys?: (palette: string) => LegendKey[];
+  /** The color the view paints nodata with, when it is not the default. */
+  nodataColor?: [number, number, number];
 }
 
 export function legendFor(layers: Layer[], context: LegendContext): Legend {
@@ -55,7 +57,7 @@ export function legendFor(layers: Layer[], context: LegendContext): Legend {
   const items = visible.map((layer) => item(layer, context));
   const painted = visible.some((layer) => layer.nodata === 'paint');
   return painted
-    ? { items, nodata: { color: NODATA_COLOR, label: 'masked' } }
+    ? { items, nodata: { color: context.nodataColor ?? NODATA_COLOR, label: 'masked' } }
     : { items };
 }
 

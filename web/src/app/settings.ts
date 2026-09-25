@@ -31,6 +31,8 @@ export interface ViewSettings {
   pixelsPerPing: number;
   colormap: string;
   filter: 'nearest' | 'linear';
+  /** Color of cells that hold no value, as #rrggbb. Absent means the default. */
+  nodataColor?: string;
   xUnit: string;
   yUnit: string;
   aspect: { mode: AspectMode; exaggeration: number };
@@ -108,6 +110,10 @@ export function parseSettings(text: string | unknown): ViewSettings {
     pixelsPerPing: number(found.pixelsPerPing, 2),
     colormap: typeof found.colormap === 'string' ? found.colormap : 'viridis',
     filter: found.filter === 'linear' ? 'linear' : 'nearest',
+    nodataColor:
+      typeof found.nodataColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(found.nodataColor)
+        ? found.nodataColor
+        : undefined,
     xUnit: typeof found.xUnit === 'string' ? found.xUnit : 'pings',
     yUnit: typeof found.yUnit === 'string' ? found.yUnit : 'range',
     aspect: {

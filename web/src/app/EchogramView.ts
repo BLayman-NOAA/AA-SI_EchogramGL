@@ -11,6 +11,11 @@
  * arrived draws from the finest coarser level that has, and the coarsest level
  * is kept resident survey wide, so a viewport inside the data never draws
  * blank, only coarser.
+ *
+ * What was fetched is kept. A tile stays resident while it is in frame, for a
+ * grace period after it leaves, and beyond that for as long as the pool has
+ * room, so a zoom out and back lands on what was drawn before. Finer levels
+ * are fetched ahead over the water on screen, as many as a byte budget allows.
  */
 
 import {
@@ -89,7 +94,7 @@ import {
   type WindowRequest,
   resolveWindow,
 } from '../geometry/window';
-import { NODATA_COLOR } from '../render/colormaps';
+import { NODATA_HEX, parseHex } from '../render/colormaps';
 import {
   type LayerPass,
   type TileView,
@@ -160,6 +165,11 @@ export interface SetStoreOptions {
   opacity?: number;
   /** How the value texture is sampled between texels. See DEFAULT_FILTER. */
   filter?: GPUFilterMode;
+  /**
+   * Color of cells that hold no value, as #rrggbb: everything masked or
+   * removed upstream (noise, seabed, surface, beyond the recorded range).
+   */
+  nodataColor?: string;
   xUnit?: XUnit;
   yUnit?: YUnit;
   aspect?: { mode: AspectMode; exaggeration?: number; hold?: 'x' | 'y' };
@@ -189,6 +199,8 @@ export interface TileStatus {
   uploading: number;
   /** Decoded tiles held, which an evicted texture is rebuilt from. */
   cachedBytes: number;
+  /** Levels loaded: the target, its ladder, and any still holding tiles. */
+  levelsHeld: number;
   /**
    * Rolling cost of encoding one redraw, in milliseconds.
    *
@@ -225,6 +237,7 @@ export interface ViewInfo {
   verticalRef: string;
   xUnit: XUnit;
   yUnit: YUnit;
+  nodataColor: string;
   xLabel: string;
   yLabel: string;
   validX: XUnit[];
@@ -268,6 +281,16 @@ const CONTRAST: [number, number] = [0.02, 0.98];
  */
 const SETTLE_MS = 140;
 
+/**
+ * Milliseconds a tile stays protected after it leaves the frame.
+ *
+ * A pan that overshoots and comes back, or a zoom out and in, asks again for
+ * the tiles it just left, and a tile evicted in between is a fetch that was
+ * already paid for. Under pool pressure these go after tiles out of frame
+ * longer, and nothing wanted this refresh goes at all.
+ */
+const RETAIN_MS = 5000;
+
 /** The settings that persist between calls, as opposed to the one shot ones. */
 interface Settings {
   level: LevelChoice;
@@ -278,6 +301,7 @@ interface Settings {
   clim: [number, number];
   opacity: number;
   filter: GPUFilterMode;
+  nodataColor: string;
   xUnit: XUnit;
   yUnit: YUnit;
   layers: Layer[];
@@ -366,6 +390,32 @@ function extent(values: number[]): [number, number] {
 }
 
 /**
+ * Pings on screen at a level, end exclusive, scanned over the tiles in frame.
+ *
+ * Tighter than the tiles, which hold 2048 pings against a viewport showing
+ * perhaps a thousand. The finer levels are held over this rather than over the
+ * tiles, so what they cost is about the viewport and not about where the tile
+ * boundaries happened to fall.
+ */
+function pingsOnScreen(
+  axis: XAxisValues,
+  tiles: Tile[],
+  x: Extent,
+): [number, number] | undefined {
+  let first = -1;
+  let last = -1;
+  for (const tile of tiles) {
+    for (let ping = tile.pings[0]; ping < tile.pings[1]; ping += 1) {
+      if (axis.right[ping] > x[0] && axis.left[ping] < x[1]) {
+        if (first < 0) first = ping;
+        last = ping;
+      }
+    }
+  }
+  return first < 0 ? undefined : [first, last + 1];
+}
+
+/**
  * The vertical every channel of a level covers together.
  *
  * The shallowest start and the widest step, which is a superset of each
@@ -399,6 +449,8 @@ interface Resident {
   view: TileView;
   /** When this tile was last wanted, for choosing what to drop. */
   seen: number;
+  /** Milliseconds clock of the last refresh that found it in frame. */
+  onScreenAt: number;
 }
 
 export class EchogramView {
@@ -468,6 +520,22 @@ export class EchogramView {
 
   /** Loaded levels by index. The target and the pinned coarsest at least. */
   private states = new Map<number, LevelState>();
+  /**
+   * Levels the footprint named the last time the view was at rest.
+   *
+   * What keeps a level loaded once its tiles are gone. Taken at rest rather
+   * than on every refresh because a drag names only the coarse fill, and a
+   * level let go for that would be loaded again the moment the drag ends.
+   */
+  private wantedLevels = new Set<number>();
+  /**
+   * Levels whose load failed, not asked for again until a control changes.
+   *
+   * The footprint names them on every pointer move, and asking again each
+   * time would turn one unreadable level into a stream of requests and error
+   * reports, which is the scheduler's reasoning about a tile applied a level up.
+   */
+  private failedLevels = new Set<number>();
   /** Loads in flight, so a zoom does not start one level load per pointer move. */
   private pending = new Map<number, Promise<LevelState>>();
   private target = 0;
@@ -491,6 +559,7 @@ export class EchogramView {
     clim: [...VALUE_CLIM],
     opacity: 1,
     filter: DEFAULT_FILTER,
+    nodataColor: NODATA_HEX,
     xUnit: 'pings',
     yUnit: 'meters',
     layers: [],
@@ -636,7 +705,9 @@ export class EchogramView {
       next.xUnit !== previous.xUnit || next.yUnit !== previous.yUnit;
     const wasAxis = this.state?.axis;
     const wasUnits = { x: previous.xUnit, y: previous.yUnit };
+    parseHex(next.nodataColor);
     this.settings = next;
+    this.layer?.setNodataColor(parseHex(next.nodataColor));
     if (unitsChanged) this.replaceAxes();
 
     if (!this.viewport) {
@@ -657,6 +728,7 @@ export class EchogramView {
     // A read that failed is not retried by a gesture, so changing any control
     // is what asks again.
     for (const index of this.states.keys()) this.scheduler?.retry(index);
+    this.failedLevels.clear();
     // Checked after the levels are loaded, since the answer comes from the
     // sidecars. A layer that cannot be differenced is left out of the stack
     // rather than drawn empty, and named through info so a host can say why.
@@ -922,6 +994,7 @@ export class EchogramView {
       pixelsPerPing: settings.pixelsPerPing,
       colormap: settings.colormap,
       filter: settings.filter as 'nearest' | 'linear',
+      nodataColor: settings.nodataColor,
       xUnit: settings.xUnit,
       yUnit: settings.yUnit,
       aspect: {
@@ -946,6 +1019,7 @@ export class EchogramView {
       pixelsPerPing: settings.pixelsPerPing,
       colormap: settings.colormap,
       filter: settings.filter,
+      nodataColor: settings.nodataColor,
       xUnit: settings.xUnit as XUnit,
       yUnit: settings.yUnit as YUnit,
       aspect: {
@@ -988,6 +1062,7 @@ export class EchogramView {
       verticalRef: this.store.multiscales.verticalRef,
       xUnit: settings.xUnit,
       yUnit: settings.yUnit,
+      nodataColor: settings.nodataColor,
       xLabel: xAxisLabel(settings.xUnit, state.context),
       yLabel: yAxisLabel(settings.yUnit, state.context),
       validX: validXUnits(state.context),
@@ -1011,6 +1086,7 @@ export class EchogramView {
         skipped: this.scheduler?.skipped ?? 0,
         uploading: this.uploader.pending,
         cachedBytes: this.cache.size,
+        levelsHeld: this.states.size,
         redrawMs: this.redrawMs,
       },
     };
@@ -1186,57 +1262,50 @@ export class EchogramView {
   }
 
   /**
-   * Choose the level from the view and load it, keeping what is still useful.
+   * Choose the level from the view and load it.
    *
-   * The level being replaced is kept while the new one loads, so a zoom refines
-   * from what was on screen rather than dropping to the pinned coarsest.
+   * Only the target is loaded here. The levels held around it, coarser for a
+   * slot to stand on and finer for a zoom to land on, are named by the
+   * footprint on the next refresh and loaded from there. The level being
+   * replaced is not let go: its tiles are in frame, and retention keeps a
+   * level for as long as it holds any, so a zoom refines from what was on
+   * screen rather than dropping to the pinned coarsest.
    */
   private async retarget(generation: number) {
-    const previous = this.target;
     const wanted = this.wantedLevel();
     // Loaded, not merely unchanged. A channel change drops every level and
     // reloads only the pinned coarsest, so the level the view is already
     // sitting on is the one that has to be asked for again, and it is exactly
     // the one an unchanged answer would skip.
-    if (wanted !== previous || !this.states.has(wanted)) {
-      await this.ensureLevel(wanted, this.settings.channel);
-      if (generation !== this.generation || this.destroyed) return;
-      this.target = wanted;
-    }
-    const fallbacks = this.fallbacks();
-    this.syncLevels(new Set([this.target, previous, this.coarsest, ...fallbacks]));
-
-    // Not awaited. These are what a slot stands on while the target's own
-    // tiles are in flight, and waiting for them would put the fallback in
-    // front of the thing it is covering for.
-    for (const level of fallbacks) {
-      if (this.states.has(level)) continue;
-      void this.ensureLevel(level, this.settings.channel)
-        .then(() => {
-          if (generation !== this.generation || this.destroyed) return;
-          this.refreshTiles();
-        })
-        .catch((error) => this.onError?.(error));
-    }
+    if (wanted === this.target && this.states.has(wanted)) return;
+    await this.ensureLevel(wanted, this.settings.channel);
+    if (generation !== this.generation || this.destroyed) return;
+    this.target = wanted;
   }
 
   /**
-   * The coarser levels held alongside the target.
+   * Load a level the footprint named and the view does not hold, then ask again.
    *
-   * The pyramid is a latency ladder as well as a resolution one. Each of these
-   * covers about twice the water of the one below for the same bytes, so a
-   * viewport that moves has something to draw before its own level arrives.
-   * Capped where substitution is capped, since a level a slot would refuse to
-   * stand on is bytes spent on nothing.
+   * Not awaited by anything. A coarser level is what a slot stands on while
+   * the target's own tiles are in flight, and waiting for it would put the
+   * stand-in behind the thing it is covering for. A finer one is speculative
+   * and has nothing to wait for it at all.
    */
-  private fallbacks(): number[] {
-    const out: number[] = [];
-    for (let step = 1; step <= SUBSTITUTION_CAP; step += 1) {
-      const level = this.target + step;
-      if (level >= this.store!.levelCount || level === this.coarsest) break;
-      out.push(level);
-    }
-    return out;
+  private loadWanted(level: number) {
+    if (this.states.has(level) || this.pending.has(level)) return;
+    if (this.failedLevels.has(level)) return;
+    const generation = this.generation;
+    void this.ensureLevel(level, this.settings.channel)
+      .then(() => {
+        if (generation !== this.generation || this.destroyed) return;
+        this.uploadGeometry();
+        this.refreshTiles();
+        this.render();
+      })
+      .catch((error) => {
+        this.failedLevels.add(level);
+        this.onError?.(error);
+      });
   }
 
   /** What the view asks for, or what was named if a level was named. */
@@ -1259,16 +1328,35 @@ export class EchogramView {
     return chooseLevel(this.target, wanted, factors);
   }
 
-  /** Let go of levels that are neither the target nor a fallback for it. */
-  private syncLevels(keep: Set<number>) {
-    for (const index of [...this.states.keys()]) {
-      if (keep.has(index)) continue;
-      const state = this.states.get(index)!;
-      for (const key of [...state.resident.keys()]) this.release(state, key);
-      this.states.delete(index);
-      this.layer?.dropLevel(index);
-      this.scheduler?.dropLevel(index);
+  /**
+   * Let go of levels holding nothing that are neither wanted nor pinned.
+   *
+   * A level is kept while any tile of it is resident, whatever the footprint
+   * says. The tiles are what retention is for and the level is what places
+   * them, so it goes only once eviction has taken the last of them, and with
+   * it the geometry buffers and the sidecars.
+   */
+  private prune() {
+    for (const state of [...this.states.values()]) {
+      if (state.index === this.target || state.index === this.coarsest) continue;
+      if (this.wantedLevels.has(state.index) || state.resident.size) continue;
+      this.dropLevel(state.index);
     }
+  }
+
+  private dropLevel(index: number) {
+    const state = this.states.get(index);
+    if (!state) return;
+    for (const key of [...state.resident.keys()]) this.release(state, key);
+    this.states.delete(index);
+    this.layer?.dropLevel(index);
+    this.scheduler?.dropLevel(index);
+  }
+
+  /** Whether a tile of a level overlaps the viewport, drawn from or not. */
+  private inFrame(state: LevelState, key: string): boolean {
+    const box = state.boxes.get(key);
+    return Boolean(box && this.viewport && boxOverlaps(box, this.viewport.x, this.viewport.y));
   }
 
   /** Vertical geometry of one level in the unit currently chosen. */
@@ -1553,6 +1641,16 @@ export class EchogramView {
       return box !== undefined && boxOverlaps(box, x, y);
     });
 
+    // Every resident tile in frame is stamped, at every level and drawn from or
+    // not, because a tile still in frame is the one thing retention promises
+    // to keep.
+    const now = performance.now();
+    for (const level of this.states.values()) {
+      for (const resident of level.resident.values()) {
+        if (this.inFrame(level, resident.tile)) resident.onScreenAt = now;
+      }
+    }
+
     this.scheduler?.request(this.wants(state, onScreen, channels, factors));
 
     let blank = 0;
@@ -1599,6 +1697,7 @@ export class EchogramView {
     this.passes = passes;
     this.layer.setDraws(passes);
     this.evict();
+    this.prune();
   }
 
   /**
@@ -1607,6 +1706,10 @@ export class EchogramView {
    * The footprint policy decides the shape of it, and this turns that into one
    * want per channel: two layers on one channel share a tile, which is what
    * makes a second colormap of the same frequency free.
+   *
+   * The footprint names levels as well as tiles. One not loaded is started
+   * here and asked for on the refresh its load triggers, so the same policy
+   * decides what is held and what is fetched.
    *
    * The pinned coarsest is appended rather than planned. It is not part of the
    * ladder around the target, it is the last thing standing between a viewport
@@ -1627,6 +1730,7 @@ export class EchogramView {
       ? plan({
           target: state.index,
           visible: { rows, columns },
+          visiblePings: pingsOnScreen(state.axis, onScreen, this.viewport!.x),
           levels: [...this.states.values()].map((held) => ({
             index: held.index,
             rows: held.grid.rows,
@@ -1637,13 +1741,23 @@ export class EchogramView {
           velocity: this.motion.velocity,
           moving: this.motion.moving,
           depth: SUBSTITUTION_CAP,
+          budget: this.footprintBudget(channels.length),
+          tileBytes:
+            state.grid.tilePings * state.grid.tileSamples * VALUE_BYTES * channels.length,
         })
       : [];
 
     const wants: TileWant[] = [];
+    const missing = new Set<number>();
     for (const tile of tiles) {
+      if (!this.states.has(tile.level)) {
+        missing.add(tile.level);
+        continue;
+      }
       for (const channel of channels) wants.push({ ...tile, channel });
     }
+    if (!this.motion.moving) this.wantedLevels = new Set(tiles.map((tile) => tile.level));
+    for (const level of missing) this.loadWanted(level);
 
     const coarsest = this.states.get(this.coarsest);
     if (coarsest && coarsest !== state) {
@@ -1782,6 +1896,7 @@ export class EchogramView {
           tile: tile.key,
           view,
           seen: this.clock,
+          onScreenAt: this.inFrame(state, tile.key) ? performance.now() : 0,
         });
         this.layer?.setTile(state.index, key.channel, tile.key, texture, view);
       },
@@ -1810,28 +1925,68 @@ export class EchogramView {
   }
 
   /**
-   * Drop the tiles wanted least recently, once tiles in use hold more than the
-   * pool's share for them. What is left of the budget is the free list the pool
-   * reuses from, which is what keeps a pan off the allocator.
+   * Drop tiles once tiles in use hold more than the pool's share for them. What
+   * is left of the budget is the free list the pool reuses from, which is what
+   * keeps a pan off the allocator.
+   *
+   * Nothing wanted this refresh goes, and nothing goes at all under the share:
+   * a tile no longer wanted stays while there is room, since the tile a zoom
+   * out left behind is the tile a zoom back in asks for first. Over the share,
+   * tiles out of frame for longer than the grace go first, the one out of frame
+   * longest first. Then tiles in frame or barely out of it, farthest level
+   * from the target first, because a level five steps finer than the one drawn
+   * is five zooms from being drawn and a level one step away is one.
    *
    * The pinned coarsest level is exempt. It is the last thing standing between
    * a viewport and an empty panel, and it is a megabyte or two.
    */
   private evict() {
     if (this.pool.inUse <= this.pool.share) return;
+    const now = performance.now();
     const channels = Math.max(channelsUsed(this.settings.layers).length, 1);
-    const spare: { state: LevelState; key: string; seen: number }[] = [];
+    const spare: {
+      state: LevelState;
+      key: string;
+      graced: boolean;
+      distance: number;
+      idle: number;
+    }[] = [];
     for (const state of this.states.values()) {
       if (state.index === this.coarsest && this.pinnable(state, channels)) continue;
+      const distance = Math.abs(state.index - this.target);
       for (const [key, held] of state.resident) {
-        if (held.seen !== this.clock) spare.push({ state, key, seen: held.seen });
+        if (held.seen === this.clock) continue;
+        const idle = now - held.onScreenAt;
+        spare.push({ state, key, graced: idle < RETAIN_MS, distance, idle });
       }
     }
-    spare.sort((a, b) => a.seen - b.seen);
+    spare.sort((a, b) => {
+      if (a.graced !== b.graced) return a.graced ? 1 : -1;
+      if (a.graced && a.distance !== b.distance) return b.distance - a.distance;
+      return b.idle - a.idle;
+    });
     while (spare.length && this.pool.inUse > this.pool.share) {
-      const oldest = spare.shift()!;
-      this.release(oldest.state, oldest.key);
+      const next = spare.shift()!;
+      this.release(next.state, next.key);
     }
+  }
+
+  /**
+   * Bytes the footprint may cost in textures.
+   *
+   * The pool's live share less the pinned coarsest, which is held whatever the
+   * footprint asks. Everything the footprint names is wanted again on every
+   * refresh and so is never evicted, which is why it has to fit: a footprint
+   * over the share is a pool held over its share for as long as the view rests
+   * there, with nothing left for what retention would keep.
+   */
+  private footprintBudget(channels: number): number {
+    const coarsest = this.states.get(this.coarsest);
+    const pinned =
+      coarsest && this.pinnable(coarsest, channels)
+        ? coarsest.shape.pings * coarsest.shape.samples * VALUE_BYTES * channels
+        : 0;
+    return Math.max(0, this.pool.share - pinned);
   }
 
   /**
@@ -1878,6 +2033,8 @@ export class EchogramView {
     this.queued.clear();
     this.states.clear();
     this.pending.clear();
+    this.wantedLevels.clear();
+    this.failedLevels.clear();
     this.passes = [];
     this.slots = 0;
     this.blank = 0;
@@ -1895,7 +2052,7 @@ export class EchogramView {
     const stack = LayerStack.create({
       context: this.context,
       format: this.context.format,
-      nodataColor: NODATA_COLOR,
+      nodataColor: parseHex(this.settings.nodataColor),
       nodataThreshold: this.store!.multiscales.nodataThreshold,
     });
     if (this.destroyed) {

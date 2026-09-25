@@ -109,3 +109,80 @@ describe('footprint policy', () => {
     expect(found.every((tile) => tile.level <= 7)).toBe(true);
   });
 });
+
+describe('finer levels', () => {
+  /** One tile on screen at level 3, of which pings 512 to 1536 are in frame. */
+  const zoomed = (over: Partial<FootprintRequest> = {}) =>
+    request({
+      target: 3,
+      visible: { rows: [2, 2], columns: [0, 0] },
+      visiblePings: [2 * 2048 + 512, 2 * 2048 + 1536],
+      ring: 0,
+      depth: 0,
+      tileBytes: 1,
+      ...over,
+    });
+
+  it('holds as many finer levels as the budget allows, nearest first', () => {
+    // The water in frame is 2 tiles at level 2, 2 at level 1 and 4 at level 0,
+    // charged one unit each against a budget the visible tile has already
+    // spent one of. Each step finer costs more than the last, so the ladder
+    // ends at the first level that does not fit.
+    expect(plan(zoomed({ budget: 1 })).every((tile) => tile.level >= 3)).toBe(true);
+
+    const one = plan(zoomed({ budget: 3 }));
+    expect(rowsAt(one, 2)).toEqual([4, 5]);
+    expect(rowsAt(one, 1)).toEqual([]);
+
+    const two = plan(zoomed({ budget: 5 }));
+    expect(rowsAt(two, 1)).toEqual([9, 10]);
+    expect(rowsAt(two, 0)).toEqual([]);
+
+    const three = plan(zoomed({ budget: 9 }));
+    expect(rowsAt(three, 0)).toEqual([18, 19, 20, 21]);
+  });
+
+  it('holds none without a budget, and none while the view is moving', () => {
+    expect(plan(zoomed({ tileBytes: 0 })).every((tile) => tile.level >= 3)).toBe(true);
+    const moving = plan(zoomed({ budget: 100, moving: true }));
+    expect(moving.every((tile) => tile.level >= 3)).toBe(true);
+  });
+
+  it('charges the target, the coarser levels and the ring first', () => {
+    // With the ring and two coarser levels the footprint costs 8 units before
+    // any finer level: 1 visible, 3 at level 4, 2 at level 5 and 2 of ring.
+    // Those are never refused, so a budget of 8 holds no finer level and a
+    // budget of 10 holds level 2, after everything else.
+    const full = { ring: 1, depth: 2 };
+    const tight = plan(zoomed({ ...full, budget: 8 }));
+    expect(tight).toHaveLength(8);
+    expect(tight.every((tile) => tile.level >= 3)).toBe(true);
+
+    const roomy = plan(zoomed({ ...full, budget: 10 }));
+    expect(rowsAt(roomy, 2)).toEqual([4, 5]);
+    const lastCoarse = roomy.map((tile) => tile.level >= 3).lastIndexOf(true);
+    const firstFine = roomy.findIndex((tile) => tile.level < 3);
+    expect(firstFine).toBeGreaterThan(lastCoarse);
+    expect(roomy.filter((tile) => tile.level < 3).every((t) => t.priority === 'low')).toBe(true);
+  });
+
+  it('names a level not loaded from an estimate of its extent', () => {
+    // Only the target is loaded. The coarser levels and the finer one are
+    // named all the same, sized from the target's row count and the factors,
+    // which is what tells the caller to load them. Nothing named is a row the
+    // level turns out not to have.
+    const found = plan(zoomed({ levels: [levels[3]], depth: 2, budget: 8 }));
+    expect(new Set(found.map((tile) => tile.level))).toEqual(new Set([2, 3, 4, 5]));
+    for (const tile of found) {
+      expect(tile.row).toBeGreaterThanOrEqual(0);
+      expect(tile.row).toBeLessThan(levels[tile.level].rows);
+    }
+  });
+
+  it('falls back to the visible rows when the pings in frame are not given', () => {
+    // Whole tiles rather than the water in frame: row 2 at level 3 is rows 8
+    // to 11 at level 1, where the pings in frame would have been 9 and 10.
+    const found = plan(zoomed({ visiblePings: undefined, budget: 100 }));
+    expect(rowsAt(found, 1)).toEqual([8, 9, 10, 11]);
+  });
+});
