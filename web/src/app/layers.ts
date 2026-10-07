@@ -63,7 +63,9 @@ export function defaultClim(against: number | undefined): [number, number] {
 /** A layer as asked for. Everything but the channel has a default. */
 export interface LayerSpec {
   id?: string;
-  /** Index along the store's channel axis. */
+  /** Which of the view's sources the layer reads. Absent means the first. */
+  source?: string;
+  /** Index along the source's channel axis. */
   channel: number;
   /**
    * The channel subtracted from it, for a difference or a ratio.
@@ -88,6 +90,8 @@ export interface LayerSpec {
 /** A layer with every question answered. */
 export interface Layer {
   id: string;
+  /** Set by the view from the spec, or to its first source. */
+  source?: string;
   channel: number;
   against?: number;
   transform: Transform;
@@ -151,6 +155,7 @@ export function resolveLayers(
 ): Layer[] {
   return specs.map((spec, index) => ({
     id: spec.id ?? `layer-${index}`,
+    source: spec.source,
     channel: spec.channel,
     // A transform naming no second channel is a plain value layer. Saying so
     // here rather than at every use means nothing downstream has to guess.

@@ -1,10 +1,10 @@
 /**
  * Layer stack controls.
  *
- * One row per layer: visibility, channel, an optional second channel to
- * difference against, color mode, blend, opacity, and the buttons that move it
- * in the stack. Row order is draw order, so what the list looks like is what
- * the picture is made of.
+ * One row per layer: visibility, the source it reads where there is more than
+ * one, channel, an optional second channel to difference against, color mode,
+ * blend, opacity, and the buttons that move it in the stack. Row order is draw
+ * order, so what the list looks like is what the picture is made of.
  *
  * Two kinds of change, and only one of them redraws. Editing a value tells the
  * view and leaves the rows alone; adding, removing or moving a layer rebuilds
@@ -21,7 +21,7 @@
 import type { ChannelOption } from '../../app/channels';
 import { type LayerSpec, defaultClim } from '../../app/layers';
 import { colormapNames } from '../../render/colormaps';
-import { perFrame } from './schedule';
+import { perFrame } from '../../app/schedule';
 
 /** Tints for a new layer, in the order the tricolor echogram wants them. */
 export const TINTS: { name: string; rgb: [number, number, number] }[] = [
@@ -36,13 +36,20 @@ export const TINTS: { name: string; rgb: [number, number, number] }[] = [
 /** Minus sign, the real one rather than a hyphen. */
 const MINUS = '−';
 
+/** One of the view's sources, and the channels it offers. */
+export interface SourceOption {
+  id: string;
+  label: string;
+  channels: ChannelOption[];
+}
+
 export interface LayerControls {
   /** Replace the stack, as when a store opens with different channels. */
   set(layers: LayerSpec[]): void;
   /** The stack as edited, ready for setOptions. */
   read(): LayerSpec[];
-  /** Offer these channels. Redraws only when the set of them changed. */
-  update(channels: ChannelOption[]): void;
+  /** Offer these sources. Redraws only when they or their channels changed. */
+  update(sources: SourceOption[]): void;
 }
 
 export function createLayerControls(
@@ -51,7 +58,9 @@ export function createLayerControls(
   onChange: () => void,
 ): LayerControls {
   let layers: LayerSpec[] = [];
-  let channels: ChannelOption[] = [{ index: 0, label: 'channel 0' }];
+  let sources: SourceOption[] = [
+    { id: 'main', label: 'main', channels: [{ index: 0, label: 'channel 0' }] },
+  ];
   const smooth = perFrame(onChange);
 
   /** A value changed. The rows already show it, so only the view needs telling. */
@@ -66,13 +75,19 @@ export function createLayerControls(
   add.addEventListener('click', () => {
     // A second layer is a second frequency more often than a second view of the
     // same one, so it opens on the first channel the stack does not use.
-    const used = new Set(layers.map((layer) => layer.channel));
-    const free = channels.find((channel) => !used.has(channel.index));
+    const source = sources[0];
+    const used = new Set(
+      layers
+        .filter((layer) => (layer.source ?? source.id) === source.id)
+        .map((layer) => layer.channel),
+    );
+    const free = source.channels.find((channel) => !used.has(channel.index));
     layers = [
       ...layers,
       {
         id: nextId(layers),
-        channel: free?.index ?? channels[0].index,
+        source: source.id,
+        channel: free?.index ?? source.channels[0]?.index ?? 0,
         color: { colormap: 'viridis' },
       },
     ];
@@ -82,7 +97,7 @@ export function createLayerControls(
   function render() {
     list.replaceChildren(
       ...layers.map((layer, index) =>
-        row(layer, channels, edited, restructured, {
+        row(layer, sources, edited, restructured, {
           remove: () => {
             layers = layers.filter((_, i) => i !== index);
             restructured();
@@ -109,9 +124,9 @@ export function createLayerControls(
     read() {
       return layers.map((layer) => ({ ...layer }));
     },
-    update(next: ChannelOption[]) {
-      if (!next.length || signature(next) === signature(channels)) return;
-      channels = next;
+    update(next: SourceOption[]) {
+      if (!next.length || signature(next) === signature(sources)) return;
+      sources = next;
       render();
     },
   };
@@ -122,13 +137,19 @@ interface RowActions {
   move(by: number): void;
 }
 
-function signature(channels: ChannelOption[]): string {
-  return channels.map((channel) => `${channel.index}:${channel.label}`).join(',');
+function signature(sources: SourceOption[]): string {
+  return sources
+    .map(
+      (source) =>
+        `${source.id}=` +
+        source.channels.map((channel) => `${channel.index}:${channel.label}`).join(','),
+    )
+    .join('|');
 }
 
 function row(
   layer: LayerSpec,
-  channels: ChannelOption[],
+  sources: SourceOption[],
   edited: () => void,
   restructured: () => void,
   actions: RowActions,
@@ -141,6 +162,25 @@ function row(
     edited();
   });
   visible.title = 'draw this layer';
+
+  const own = sources.find((source) => source.id === layer.source) ?? sources[0];
+  const channels = own.channels;
+  // A layer moved to another dataset starts on that dataset's first channel,
+  // with nothing to difference against: the channel it had means nothing
+  // there.
+  const source = select(
+    sources.map((option) => [option.label, option.id] as [string, string]),
+    own.id,
+    (value) => {
+      layer.source = value;
+      const moved = sources.find((option) => option.id === value);
+      layer.channel = moved?.channels[0]?.index ?? 0;
+      layer.against = undefined;
+      restructured();
+    },
+  );
+  source.title = 'which dataset the layer draws';
+  source.hidden = sources.length < 2;
 
   const channel = select(
     channels.map((option) => [option.label, String(option.index)] as [string, string]),
@@ -236,6 +276,7 @@ function row(
 
   line.append(
     visible,
+    source,
     channel,
     against,
     color,

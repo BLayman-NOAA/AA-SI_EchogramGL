@@ -24,6 +24,11 @@ export interface AxisContext {
   hasGps: boolean;
   /** Original ping indices the first and last bin cover, for the MVBS label. */
   pingSpan?: [number, number];
+  /**
+   * Whether only time and metres mean one thing across the data, as for many
+   * files laid side by side, each counting its pings from its own start.
+   */
+  timeOnly?: boolean;
 }
 
 export class AxisUnitError extends Error {
@@ -38,6 +43,7 @@ export function isMvbs(dataType: string): boolean {
 }
 
 export function validXUnits(context: AxisContext): XUnit[] {
+  if (context.timeOnly) return [...SHARED_X_UNITS];
   return X_UNITS.filter((unit) => {
     if (unit === 'bins') return isMvbs(context.dataType);
     if (unit === 'meters') return context.hasGps;
@@ -46,7 +52,36 @@ export function validXUnits(context: AxisContext): XUnit[] {
 }
 
 export function validYUnits(context: AxisContext): YUnit[] {
+  if (context.timeOnly) return [...SHARED_Y_UNITS];
   return Y_UNITS.filter((unit) => unit !== 'bins' || isMvbs(context.dataType));
+}
+
+/** The only units that mean the same thing in every dataset of a view. */
+export const SHARED_X_UNITS: XUnit[] = ['datetime', 'seconds'];
+export const SHARED_Y_UNITS: YUnit[] = ['meters'];
+
+/**
+ * X units a view over several datasets can offer.
+ *
+ * Every unit each one offers, and with more than one only time: pings, bins
+ * and along track distance count from one dataset's own start, so the same
+ * number names a different place in each.
+ */
+export function sharedXUnits(contexts: AxisContext[]): XUnit[] {
+  const units = common(contexts.map(validXUnits));
+  return contexts.length > 1 ? units.filter((unit) => SHARED_X_UNITS.includes(unit)) : units;
+}
+
+/** Y units a view over several datasets can offer: metres once there are two. */
+export function sharedYUnits(contexts: AxisContext[]): YUnit[] {
+  const units = common(contexts.map(validYUnits));
+  return contexts.length > 1 ? units.filter((unit) => SHARED_Y_UNITS.includes(unit)) : units;
+}
+
+/** Units every one of several lists offers, in the first list's order. */
+function common<T>(lists: T[][]): T[] {
+  if (!lists.length) return [];
+  return lists[0].filter((unit) => lists.every((list) => list.includes(unit)));
 }
 
 /** Throw if the unit is not usable for this store, naming what is. */

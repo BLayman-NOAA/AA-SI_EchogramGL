@@ -94,13 +94,13 @@ export function chooseLevel(
 }
 
 /**
- * Levels past the target a slot will stand on.
+ * Levels coarser than the target held around it as stand ins.
  *
  * A tile two levels coarse is stretched four to one along the ping axis, which
- * reads as coarseness. Four levels is sixteen to one, which reads as a
- * scattering layer: the picture stops looking like a low resolution echogram
- * and starts looking like a different measurement. The pinned coarsest is
- * exempt, because the alternative there is an empty panel.
+ * reads as coarseness, so two coarser levels are fetched ahead. It is not a
+ * limit on what a slot draws from: a slot takes the finest resident level
+ * however far that is, since the pinned coarsest, which is always there, is
+ * only ever coarser still.
  */
 export const SUBSTITUTION_CAP = 2;
 
@@ -112,10 +112,6 @@ export interface SlotContext {
   /** Pings the level holds, for clamping the last tile of a level. */
   pingsAt: (level: number) => number;
   resident: (level: number, row: number, column: number) => boolean;
-  /** Levels past the target a substitution may reach. */
-  cap?: number;
-  /** A level the cap does not apply to, which is the pinned coarsest. */
-  exempt?: number;
 }
 
 /**
@@ -125,22 +121,19 @@ export interface SlotContext {
  * the tile, so the fallback is monotonic and never names a level that is not
  * resident. Undefined means nothing covers the slot, which the pinned coarsest
  * level is there to prevent.
+ *
+ * No level is passed over for being too coarse. A zoom in that moves the
+ * target several levels at once leaves the level on screen several levels
+ * coarser than the new target, and passing over it drops the slot to the
+ * pinned coarsest, which is a worse picture than the one it replaced.
  */
 export function resolveSlot(
   slot: { row: number; column: number },
   target: number,
   context: SlotContext,
 ): SlotDraw | undefined {
-  const {
-    factors,
-    tilePings,
-    pingsAt,
-    resident,
-    cap = SUBSTITUTION_CAP,
-    exempt,
-  } = context;
+  const { factors, tilePings, pingsAt, resident } = context;
   for (let level = target; level < factors.length; level += 1) {
-    if (level - target > cap && level !== exempt) continue;
     const ratio = factors[level] / factors[target];
     // Powers of two by construction. A factor that does not divide the tile
     // would put a slot boundary inside a coarse ping, which is not a range.

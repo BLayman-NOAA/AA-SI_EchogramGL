@@ -140,9 +140,25 @@ export class DecodePool {
         }
         signal.addEventListener('abort', () => this.cancel(id), { once: true });
       }
-      this.queue.push(entry);
+      this.enqueue(entry);
       this.drain();
     });
+  }
+
+  /**
+   * Queue a request behind the others of its priority.
+   *
+   * Visible tiles ahead of speculative ones, and within a priority in the
+   * order asked, which is the order the view ranked them in.
+   */
+  private enqueue(entry: Pending) {
+    if (entry.request.priority !== 'high') {
+      this.queue.push(entry);
+      return;
+    }
+    const after = this.queue.findIndex((held) => held.request.priority !== 'high');
+    if (after < 0) this.queue.push(entry);
+    else this.queue.splice(after, 0, entry);
   }
 
   /**

@@ -23,6 +23,8 @@ import {
   StoreError,
 } from './contract';
 import { openPlainStore } from './plain';
+import type { SummaryDocument } from './summaries';
+import { toNanoseconds } from './time';
 
 // Re-exported so that every existing importer of this module keeps working and
 // callers have one place to reach for. The definitions live in contract.ts.
@@ -134,8 +136,25 @@ export class Level implements LevelReader {
     };
   }
 
-  /** Read a sidecar array as float64, or undefined if it is not present. */
-  async readSidecar(name: string): Promise<Float64Array | undefined> {
+  private sidecars = new Map<string, Promise<Float64Array | undefined>>();
+
+  /**
+   * Read a sidecar array as float64, or undefined if it is not present.
+   *
+   * Read once per level. The geometry asks for the same two arrays once per
+   * channel, and each is the whole level's.
+   */
+  readSidecar(name: string): Promise<Float64Array | undefined> {
+    let found = this.sidecars.get(name);
+    if (!found) {
+      found = this.loadSidecar(name);
+      this.sidecars.set(name, found);
+      found.catch(() => this.sidecars.delete(name));
+    }
+    return found;
+  }
+
+  private async loadSidecar(name: string): Promise<Float64Array | undefined> {
     let array;
     try {
       array = await zarr.open(this.group.resolve(name), { kind: 'array' });
@@ -146,7 +165,9 @@ export class Level implements LevelReader {
       throw error;
     }
     const chunk = await zarr.get(array, null);
-    return toFloat64(chunk.data);
+    // Times xarray wrote carry CF units, which the builder's do not.
+    const units = (array.attrs as { units?: unknown }).units;
+    return toNanoseconds(toFloat64(chunk.data), units);
   }
 
   /** Vertical geometry for one channel. */
@@ -181,6 +202,12 @@ export class EchogramStore {
      */
     readonly plain?: LevelReader,
   ) {}
+
+  /**
+   * Summaries held in the root attributes rather than beside the store, which
+   * is where a pyramid written as a recipe checkpoint keeps them.
+   */
+  inlineSummaries?: SummaryDocument;
 
   /** Whether this was adapted from a plain Sv dataset rather than built. */
   get isPlain(): boolean {
@@ -249,11 +276,15 @@ export async function openEchogramStore(store: ChunkStore): Promise<EchogramStor
     return new EchogramStore(plain.multiscales, root, undefined, plain.level);
   }
   const summaries = root.attrs.chunkSummaries;
-  return new EchogramStore(
+  const opened = new EchogramStore(
     blocks[0],
     root,
     typeof summaries === 'string' ? summaries : undefined,
   );
+  if (summaries && typeof summaries === 'object') {
+    opened.inlineSummaries = summaries as SummaryDocument;
+  }
+  return opened;
 }
 
 /** Refuse a window outside the level, rather than reading a surprising shape. */

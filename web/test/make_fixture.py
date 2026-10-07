@@ -18,13 +18,14 @@ import shutil
 import numpy as np
 import zarr
 
-from aa_si_echogram_gl import fixtures, geometry, pyramid
+from aa_si_echogram_gl import fixtures, geometry, ops, pyramid
 
 HERE = pathlib.Path(__file__).parent
 PLAIN = HERE / "fixture-store.zarr"
 SV_DATASET = HERE / "sv-dataset.zarr"
 GEOMETRY = HERE / "geometry-store.zarr"
 REFERENCE = HERE / "geometry.reference.json"
+CHECKPOINT = HERE / "checkpoint-store.zarr"
 
 
 def write_plain():
@@ -150,10 +151,35 @@ def _write(root, name, values, dimensions):
     array.attrs["_ARRAY_DIMENSIONS"] = dimensions
 
 
+def write_checkpoint():
+    """A pyramid as a recipe checkpoint wrote one before the ops set encoding.
+
+    Written by xarray rather than by the builder: zarr v2, summaries inline in
+    the root attributes, and `ping_time` in CF units counting seconds from the
+    first ping, which read as nanoseconds since 1970 lands in January 1970.
+    """
+    replace(CHECKPOINT)
+    tree = ops.build_echogram_pyramid(
+        fixtures.synthetic(n_pings=32, n_samples=12, gridded=True, gps=False),
+        levels=2,
+        range_var="depth",
+    )
+    for node in tree.children.values():
+        node["ping_time"].encoding = {
+            "units": "seconds since 2024-06-01 00:00:00",
+            "dtype": "int64",
+        }
+        node["Sv"].encoding = {}
+    tree.to_zarr(str(CHECKPOINT), mode="w", zarr_format=2, consolidated=False)
+    zarr.consolidate_metadata(str(CHECKPOINT), zarr_format=2)
+    print(f"wrote {CHECKPOINT}")
+
+
 def main():
     write_plain()
     write_geometry()
     write_sv_dataset()
+    write_checkpoint()
 
 
 if __name__ == "__main__":

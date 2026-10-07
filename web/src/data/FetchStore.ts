@@ -55,11 +55,47 @@ export class FetchStore implements ChunkStore {
       (request as RequestInit & { priority: string }).priority = priority;
     }
 
-    const response = await fetch(url, request);
-    if (response.status === 404) return undefined;
-    if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText} for ${url.href}`);
+    // A network failure rejects with a bare "Failed to fetch" that names no
+    // URL. It is retried, since a dropped connection is usually transient and
+    // a tile that fails stays blank until the next gesture, and then rethrown
+    // with the URL. An abort is left as it is, because the scheduler
+    // recognises it by name and drops it quietly.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const response = await fetch(url, request);
+        if (response.status === 404) return undefined;
+        if (!response.ok) {
+          throw new Error(`${response.status} ${response.statusText} for ${url.href}`);
+        }
+        return new Uint8Array(await response.arrayBuffer());
+      } catch (error) {
+        if (options?.signal?.aborted || !(error instanceof TypeError)) throw error;
+        if (attempt > NETWORK_RETRIES) {
+          const tries = attempt === 1 ? '' : ` after ${attempt} attempts`;
+          throw new Error(`${error.message} for ${url.href}${tries}`, { cause: error });
+        }
+        await pause(RETRY_DELAY_MS * attempt, options?.signal);
+      }
     }
-    return new Uint8Array(await response.arrayBuffer());
   }
+}
+
+/** Retries after a network failure, before it is reported. */
+export const NETWORK_RETRIES = 2;
+
+const RETRY_DELAY_MS = 250;
+
+/** Wait, or reject with the signal's reason as soon as it aborts. */
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', stop);
+      resolve();
+    }, ms);
+    const stop = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener('abort', stop, { once: true });
+  });
 }

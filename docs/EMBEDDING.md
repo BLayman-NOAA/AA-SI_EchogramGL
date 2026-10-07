@@ -29,7 +29,7 @@ policy and a window, and `info`, which reports what the view settled on.
 
 ## What it draws
 
-Two things, and one of them is much better than the other.
+Three things, and the first is what the viewer is built for.
 
 **A pyramid store**, which is a zarr group with a `multiscales` attribute as
 `aa-echogram build` writes one: levels, per level geometry sidecars, per chunk
@@ -58,6 +58,10 @@ exists at a URL or it does not.
 This is the part worth agreeing on before wiring anything together. A host that
 lets a user pick a file needs an answer to "where is the store for this file",
 and that answer comes from the host's catalog, not from here.
+
+**A set of datasets laid side by side in time**, each described by a header a
+server computed. This is how a step mapped over raw files is drawn without
+merging files whose sample grids differ. See Supplying data below.
 
 ### What a plain dataset has to have
 
@@ -101,6 +105,125 @@ from a speculative one.
 Nothing in the library knows about SSH, GCS, recipes or provenance, and nothing
 in it should start to. That rule is enforced mechanically: `dependency-cruiser`
 fails the build if anything below `shell/` imports from it.
+
+## The panel
+
+`EchogramView` is the echogram alone. `EchogramPanel` is the echogram with the
+controls that change how it is drawn, for a host that wants them rather than
+building its own:
+
+```ts
+import { createGpuContext, EchogramPanel } from 'aa-si-echogram-gl';
+
+const panel = new EchogramPanel({
+  container,
+  context: await createGpuContext(),
+  storageKey: 'myapp.echogram',   // remembers which sections are open
+});
+await panel.addSource('survey', 'https://example.org/stores/abc123/');
+```
+
+The controls sit above the echogram in sections that collapse to a one line
+header: **Layers** (the stack: source, channel, difference, color, limits,
+blend, opacity, order), **Axes and view** (units, aspect, exaggeration, true
+scale, fit, bounds) and **Display and tools** (level, pixels per ping,
+default colormap, no data color, sampling, auto contrast, measure). Only Layers
+is open at first; `open` names others, and `storageKey` remembers what the user
+chose. The echogram takes whatever height the sections leave.
+
+The panel has no way of choosing data, deliberately. A host puts its own
+picker in a section of the panel:
+
+```ts
+panel.addSection('data', 'Data', myPicker, { open: true });
+```
+
+Host sections sit above the panel's own. A control that belongs with the
+panel's, such as a button opening a second window, goes into one of its
+sections instead: `panel.appendTo('display', button)`. `panel.view` is the `EchogramView`
+underneath, for anything the panel does not cover.
+
+The look is scoped under `.egl-panel` and its colors are custom properties,
+so a host matches its own by setting them on the container:
+
+```css
+#echogram { --egl-bar: #202124; --egl-text: #e8eaed; --egl-warning: #fbbc04; }
+```
+
+The others are `--egl-background`, `--egl-line`, `--egl-muted` and
+`--egl-readout`.
+
+## Supplying data
+
+`setStore`, `addSource` and `replaceSource` take three kinds of input, on the
+view and the panel alike:
+
+- **A URL**, to a pyramid store or to a plain Sv dataset.
+- **A `ChunkStore`**, for bytes from anywhere else.
+- **A `PieceSetSpec`**, for many datasets laid side by side in time, such as
+  one per raw file. Each piece names its time span, its size, and two URLs:
+  a header, which says where every ping and sample sits, and the zarr group
+  holding its values. The viewer opens the pieces nearest the middle of the
+  screen first, within a memory and transfer budget, and never more than it
+  can hold.
+
+```ts
+await panel.addSource('per-file', {
+  name: 'compute_sv',
+  pieces: [
+    {
+      id: 'D20241106-T125158',
+      start: 1730897518000000000,       // first ping, ns since 1970
+      end: 1730900278000000000,         // last ping
+      pings: 3305, channels: 5, samples: 2792,
+      header: 'https://example.org/describe/D20241106-T125158',
+      store: 'https://example.org/data/D20241106-T125158/',
+    },
+    // ...
+  ],
+});
+```
+
+How a host finds its data is its own business: from a recipe, a cache, a
+list of paths or a database. `aa-echogram serve` is one answer: `/api/resolve`
+names a recipe step's checkpoint, `/api/open` a store or dataset at a path,
+and `/api/describe/<mount>` serves the headers. The development page's two
+pickers, under `web/src/shell/providers/`, show both and the small interface
+a picker implements.
+
+`replaceSource(id, input)` swaps a source for newer data in place, keeping
+its layers' place, color and limits and the view where it is. It is what a
+refresh after a rerun calls.
+
+## What is under the cursor
+
+The panel shows, in the top right corner of the echogram, the time and depth
+under the pointer, each visible layer's value there, and the size of the cell
+drawn, which says what level of the pyramid is on screen:
+
+```
+2016-07-25 21:03:40 UTC
+depth 411.0 m
+38 kHz  -67.3 dB
+cell 80 s x 2.00 m  (level 3, 8 pings)
+```
+
+The value comes from the decoded tile already in memory, so it costs no
+request and no read back from the GPU. With nothing under the pointer the box
+shows anything the view wants said, such as files left unloaded.
+
+A host using the bare view gets the same thing as data:
+
+```ts
+const view = new EchogramView({
+  container,
+  context,
+  onHover: (probe) => render(probe),   // undefined when the pointer leaves
+});
+const probe = view.probe(event.clientX, event.clientY);
+```
+
+`formatProbe(probe)` turns one into the lines above.
 
 ## Several panels
 

@@ -11,7 +11,7 @@
  * tile has something to draw.
  */
 
-import type { ChunkStore } from './store';
+import type { ChunkStore } from './contract';
 
 /** What the builder records per chunk. Only `allNodata` is read here. */
 export interface ChunkSummary {

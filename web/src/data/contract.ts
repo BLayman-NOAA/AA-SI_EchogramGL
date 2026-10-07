@@ -86,7 +86,10 @@ export class StoreError extends Error {
  * whatever dtype it holds, with its geometry derived rather than read. Both
  * satisfy this, and nothing above the data layer can tell which it has.
  */
-/** Where each of the three axes sits in an array's own dimension list. */
+/**
+ * Where each of the three axes sits in an array's own dimension list. A
+ * channel of -1 is an array with no channel axis, read as one channel.
+ */
 export interface AxisOrder {
   channel: number;
   ping: number;

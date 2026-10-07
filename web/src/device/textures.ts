@@ -59,7 +59,10 @@ export function createValueTexture(
     size: [size.samples, size.pings, 1],
     format: VALUE_FORMAT,
     dimension: '2d',
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    usage:
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.COPY_SRC,
   });
 }
 
@@ -68,7 +71,11 @@ export function createValuePool(device: GPUDevice, budget?: number): TexturePool
   return new TexturePool({
     device,
     format: VALUE_FORMAT,
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    // COPY_SRC so the hover readout can read one value back from a tile.
+    usage:
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.COPY_SRC,
     budget,
     label: 'value tile',
   });

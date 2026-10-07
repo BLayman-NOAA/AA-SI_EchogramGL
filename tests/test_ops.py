@@ -194,3 +194,62 @@ class TestMerging:
         empty = xr.DataTree.from_dict({"/0": xr.Dataset()})
         with pytest.raises(ValueError, match="not a pyramid"):
             ops.merge_echogram_pyramids([empty, empty])
+
+
+def write_as_a_checkpoint(tree, path, attempts=5):
+    """Write a tree as the recipe manager's checkpoint does.
+
+    Unconsolidated, then consolidated once. Retried, because on Windows a
+    scanner holding a new metadata file can refuse the rename that puts it in
+    place.
+    """
+    import time
+
+    import zarr
+
+    for attempt in range(attempts):
+        try:
+            tree.to_zarr(path, mode="w", zarr_format=2, consolidated=False)
+            zarr.consolidate_metadata(str(path), zarr_format=2)
+            return zarr.open_group(str(path), mode="r")
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.2 * (attempt + 1))
+
+
+def test_a_checkpointed_pyramid_is_chunked_as_declared(tmp_path):
+    tree = ops.build_echogram_pyramid(
+        survey(n_pings=3000, n_samples=600), levels=2, chunks=(1, 1024, 256)
+    )
+    group = write_as_a_checkpoint(tree, tmp_path / "pyramid.zarr")
+    spec = group.attrs["multiscales"][0]
+    for entry in spec["datasets"]:
+        values = group[entry["path"]][spec["name"]]
+        assert list(values.chunks) == entry["chunks"]
+
+
+def test_a_checkpointed_pyramid_keeps_times_in_nanoseconds(tmp_path):
+    tree = ops.build_echogram_pyramid(survey(n_pings=64), levels=2)
+    group = write_as_a_checkpoint(tree, tmp_path / "pyramid.zarr")
+    for name in ("0", "1"):
+        times = group[name]["ping_time"]
+        assert times.attrs["units"] == "nanoseconds since 1970-01-01"
+        expected = tree[name]["ping_time"].values.astype("datetime64[ns]")
+        assert np.array_equal(times[:], expected.astype("int64"))
+
+
+def test_a_merged_pyramid_is_chunked_as_declared(tmp_path):
+    ds = survey(n_pings=3000, n_samples=600)
+    ranges = ops.plan_pyramid_segments(ds, levels=2, target_pings=1024)["ranges"]
+    parts = [
+        ops.build_echogram_pyramid(ds, levels=2, ping_range=r, chunks=(1, 1024, 256))
+        for r in ranges
+    ]
+    merged = ops.merge_echogram_pyramids(parts, chunks=(1, 1024, 256))
+    group = write_as_a_checkpoint(merged, tmp_path / "pyramid.zarr")
+    spec = group.attrs["multiscales"][0]
+    for entry in spec["datasets"]:
+        level = group[entry["path"]]
+        assert list(level[spec["name"]].chunks) == entry["chunks"]
+        assert level["ping_time"].attrs["units"].startswith("nanoseconds")

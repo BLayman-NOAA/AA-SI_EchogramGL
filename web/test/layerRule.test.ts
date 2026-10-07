@@ -18,6 +18,12 @@ import { describe, expect, it } from 'vitest';
 
 const root = join(import.meta.dirname, '..');
 
+/**
+ * Starting a process under a full parallel run can take longer than the
+ * default allows, which is a slow machine rather than a broken rule.
+ */
+const SLOW = 30_000;
+
 function cruise(target: string): { code: number; output: string } {
   try {
     const output = execFileSync(
@@ -40,7 +46,7 @@ function cruise(target: string): { code: number; output: string } {
 describe('the layer rule', () => {
   it('passes over the source as it stands', () => {
     expect(cruise('src').code).toBe(0);
-  });
+  }, SLOW);
 
   it('fails when something below the shell imports the shell', () => {
     // app/ may not reach into shell/. That is what keeps the view embeddable in
@@ -59,7 +65,41 @@ describe('the layer rule', () => {
     } finally {
       rmSync(offence, { force: true });
     }
-  });
+  }, SLOW);
+
+  it('fails when the core imports the panel', () => {
+    // The panel builds controls on the view. The view knowing about them would
+    // make the controls part of every host, wanted or not.
+    const offence = join(root, 'src/app/__panelCheck.ts');
+    writeFileSync(
+      offence,
+      "import { formatProbe } from '../panel/readout';\nexport const format = formatProbe;\n",
+      'utf8',
+    );
+    try {
+      const found = cruise('src');
+      expect(found.code).not.toBe(0);
+      expect(found.output).toContain('no-panel-in-core');
+    } finally {
+      rmSync(offence, { force: true });
+    }
+  }, SLOW);
+
+  it('fails when the panel imports the shell', () => {
+    const offence = join(root, 'src/panel/__shellCheck.ts');
+    writeFileSync(
+      offence,
+      "import { CHANNEL_NAME } from '../shell/channel';\nexport const name = CHANNEL_NAME;\n",
+      'utf8',
+    );
+    try {
+      const found = cruise('src');
+      expect(found.code).not.toBe(0);
+      expect(found.output).toContain('no-shell-below-shell');
+    } finally {
+      rmSync(offence, { force: true });
+    }
+  }, SLOW);
 
   it('fails on a circular import', () => {
     const directory = mkdtempSync(join(tmpdir(), 'layer-rule-'));
@@ -72,5 +112,5 @@ describe('the layer rule', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, SLOW);
 });

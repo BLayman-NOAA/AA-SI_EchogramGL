@@ -1,6 +1,9 @@
 """Development server tests."""
 
+import socket
+import struct
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -94,6 +97,42 @@ def test_no_app_directory_means_no_root(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+class LargeSource:
+    """A store whose every object is large enough to outlast a socket buffer."""
+
+    def read(self, key):
+        return bytes(64 * 1024 * 1024)
+
+
+def test_a_client_hanging_up_is_one_line_not_a_traceback(capsys):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), serve.make_handler(LargeSource()))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = socket.create_connection(("127.0.0.1", server.server_address[1]))
+        client.sendall(b"GET /store/0/Sv/0.0.0 HTTP/1.1\r\nHost: x\r\n\r\n")
+        client.recv(1024)
+        # Zero linger turns the close into a reset, which is what a browser
+        # cancelling a fetch looks like from the server.
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        client.close()
+
+        deadline = time.monotonic() + 10
+        out = err = ""
+        while "client closed" not in out and time.monotonic() < deadline:
+            time.sleep(0.05)
+            captured = capsys.readouterr()
+            out += captured.out
+            err += captured.err
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert "client closed /store/0/Sv/0.0.0 after" in out
+    assert "Traceback" not in err
 
 
 class FakeFilesystem:

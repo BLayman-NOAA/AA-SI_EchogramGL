@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createAxisControls } from '../src/shell/controls/axes';
+import { createAxisControls } from '../src/panel/controls/axes';
 
 // Enough of a <select> for read(): the node test environment has no DOM.
 function select(value = ''): HTMLSelectElement {

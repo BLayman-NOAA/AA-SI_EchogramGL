@@ -16,6 +16,7 @@
  * an older build has to either upgrade or be refused, never be half applied.
  */
 
+import { type PieceSetSpec, isPieceSet } from '../data/pieces';
 import type { LayerSpec } from './layers';
 import type { AspectMode } from './viewport';
 
@@ -26,6 +27,11 @@ export interface ViewSettings {
   version: number;
   /** Where the store is, so a second window opens the same data. */
   store?: string;
+  /**
+   * Every source, where there is more than one or the one there is was not
+   * opened as `store`. Layers say which they read by id.
+   */
+  sources?: SourceSetting[];
   layers: LayerSpec[];
   level: number | 'auto';
   pixelsPerPing: number;
@@ -40,6 +46,16 @@ export interface ViewSettings {
   window?: { x: [number, number]; y: [number, number] };
 }
 
+/**
+ * One source of a view: the id layers name it by, and how to open it again.
+ * A store by its URL, or a set of described datasets by its spec.
+ */
+export interface SourceSetting {
+  id: string;
+  store?: string;
+  spec?: PieceSetSpec;
+}
+
 export class SettingsError extends Error {
   constructor(message: string) {
     super(message);
@@ -51,6 +67,10 @@ export class SettingsError extends Error {
 export function copySettings(settings: ViewSettings): ViewSettings {
   return {
     ...settings,
+    sources: settings.sources?.map((source) => ({
+      ...source,
+      spec: source.spec ? structuredClone(source.spec) : undefined,
+    })),
     layers: settings.layers.map((layer) => ({
       ...layer,
       clim: layer.clim ? ([...layer.clim] as [number, number]) : undefined,
@@ -105,6 +125,7 @@ export function parseSettings(text: string | unknown): ViewSettings {
   return upgrade({
     version: found.version,
     store: typeof found.store === 'string' ? found.store : undefined,
+    sources: sourceList(found.sources),
     layers: found.layers as LayerSpec[],
     level: found.level === 'auto' || typeof found.level === 'number' ? found.level : 'auto',
     pixelsPerPing: number(found.pixelsPerPing, 2),
@@ -133,6 +154,20 @@ export function parseSettings(text: string | unknown): ViewSettings {
  */
 function upgrade(settings: ViewSettings): ViewSettings {
   return { ...settings, version: SETTINGS_VERSION };
+}
+
+function sourceList(value: unknown): SourceSetting[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const found: SourceSetting[] = [];
+  for (const item of value as Partial<SourceSetting>[]) {
+    if (!item || typeof item.id !== 'string') continue;
+    if (typeof item.store === 'string') {
+      found.push({ id: item.id, store: item.store });
+    } else if (isPieceSet(item.spec)) {
+      found.push({ id: item.id, spec: item.spec });
+    }
+  }
+  return found.length ? found : undefined;
 }
 
 function number(value: unknown, fallback: number): number {

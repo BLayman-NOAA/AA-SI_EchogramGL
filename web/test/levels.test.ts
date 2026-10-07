@@ -105,9 +105,6 @@ describe('resolveSlot', () => {
       pingsAt,
       resident: (level: number, row: number, column: number) =>
         held.has(`${level}:${row}:${column}`),
-      // The last level is the one the view pins for the whole survey, and the
-      // substitution cap does not apply to it.
-      exempt: factors.length - 1,
     };
   }
 
@@ -154,18 +151,14 @@ describe('resolveSlot', () => {
     expect(resolveSlot({ row: 3, column: 0 }, 0, context(new Set()))).toBeUndefined();
   });
 
-  it('will not stand a slot on a level more than the cap coarser', () => {
-    // Level 3 against a level 0 target is eight to one along the ping axis. It
-    // is not low resolution any more, it is a different picture, and drawing
-    // it says the data looks like something it does not.
-    const held = new Set(['3:0:0']);
-    expect(resolveSlot({ row: 3, column: 0 }, 0, context(held))).toBeUndefined();
-    expect(
-      resolveSlot({ row: 3, column: 0 }, 0, { ...context(held), cap: 3 })?.level,
-    ).toBe(3);
+  it('stands on the level last drawn after a zoom of several levels', () => {
+    // A fast zoom in moves the target from 3 to 0 before levels 1 and 2 have
+    // arrived. Level 3 is what was on screen; the pinned coarsest is worse.
+    const held = new Set(['3:0:0', '4:0:0']);
+    expect(resolveSlot({ row: 3, column: 0 }, 0, context(held))?.level).toBe(3);
   });
 
-  it('exempts the pinned coarsest, whose alternative is an empty panel', () => {
+  it('falls to the pinned coarsest when nothing finer is resident', () => {
     const held = new Set(['4:0:0']);
     expect(resolveSlot({ row: 3, column: 0 }, 0, context(held))?.level).toBe(4);
   });

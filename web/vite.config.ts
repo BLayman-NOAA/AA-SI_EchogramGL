@@ -21,6 +21,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/store': { target: storeOrigin },
+      '/api': { target: storeOrigin },
+      '/mount': { target: storeOrigin },
     },
   },
   test: {

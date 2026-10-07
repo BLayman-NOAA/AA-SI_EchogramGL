@@ -20,24 +20,46 @@
  * provenance, and nothing here should start to.
  *
  * **What it draws.** A pyramid store: a zarr group with a `multiscales`
- * attribute, as `aa-echogram build` writes one. Not a raw file, and not an Sv
- * dataset. Turning a file a user selected into one of these is a separate job
- * and belongs to whatever owns the processing, not to the viewer.
+ * attribute, as `aa-echogram build` writes one. A plain Sv dataset, read as one
+ * level. And a set of datasets laid side by side in time, each described by a
+ * header a server computed (`PieceSetSpec`). Not a raw file: turning a file a
+ * user selected into one of these belongs to whatever owns the processing.
  *
- * `shell/` is deliberately absent. It is the development page, and it is the
- * one thing an embedding host replaces with its own chrome.
+ * **Two ways to embed it.** `EchogramView` is the echogram alone, for a host
+ * that builds its own controls. `EchogramPanel` is the echogram with the
+ * controls that change how it is drawn, in collapsible sections, and a
+ * readout of what is under the pointer. Neither chooses data: a host does,
+ * and hands it over with `setStore`, `addSource` or `replaceSource`.
+ *
+ * `shell/` is deliberately absent. It is the development page, with its own
+ * data pickers, and it is what an embedding host replaces with its own.
  */
 
 export {
   EchogramView,
   type EchogramViewOptions,
   type LevelChoice,
+  type Probe,
+  type ProbeLayer,
   type SetStoreOptions,
+  type SourceInfo,
+  type SourceInput,
   type StatisticsRequest,
   type TileStatus,
   type ViewInfo,
   type ViewStatistics,
 } from './app/EchogramView';
+
+export { EchogramPanel, type EchogramPanelOptions } from './panel/EchogramPanel';
+
+export { type Readout, formatProbe } from './panel/readout';
+
+export {
+  type Header,
+  type PieceSetSpec,
+  type PieceSpec,
+  isPieceSet,
+} from './data/pieces';
 
 export {
   type AspectMode,

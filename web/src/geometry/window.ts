@@ -21,7 +21,7 @@ export interface WindowRequest {
 
 export interface WindowContext {
   axis: XAxisValues;
-  /** Nanoseconds since the unix epoch of the first ping. */
+  /** Nanoseconds since the unix epoch that the time axis counts from. */
   epochNs: number;
   /** Shallowest and deepest the data reaches. */
   vertical: Range;

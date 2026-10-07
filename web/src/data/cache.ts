@@ -56,6 +56,11 @@ export class ArrayCache<T> {
     return this.levels.get(level)?.has(key) ?? false;
   }
 
+  /** Read an entry without counting it as used, as a readout does. */
+  peek(level: number, key: string): T | undefined {
+    return this.levels.get(level)?.get(key)?.value;
+  }
+
   /** Read an entry, which counts as using it. */
   get(level: number, key: string): T | undefined {
     const held = this.levels.get(level);

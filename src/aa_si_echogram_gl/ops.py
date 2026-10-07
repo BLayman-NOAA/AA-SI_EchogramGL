@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 SUMMARIES_ATTR = "chunkSummaries"
 
+TIME_ENCODING = {"units": "nanoseconds since 1970-01-01", "dtype": "int64"}
+"""How `ping_time` is written: the int64 nanoseconds the builder writes.
+Left to xarray, a level is written as a count from its own first ping in
+whatever unit holds its times exactly."""
+
 DEFAULT_SEGMENT_PINGS = 32768
 """Pings a segment aims for, which is 2048 * 16.
 
@@ -219,6 +224,7 @@ def merge_echogram_pyramids(parts, dim="ping_time", chunks=DEFAULT_CHUNKS):
             min(c, s)
             for c, s in zip(chunks, level[value_var].shape, strict=True)
         )
+        level = merged[name] = _encode(level, value_var, effective)
         spec["datasets"][index]["chunks"] = list(effective)
         all_summaries[name] = summaries_module.summarize_level(
             np.asarray(level[value_var].values),
@@ -249,12 +255,32 @@ def _as_tree(built):
         }
         for key, array in level.arrays.items():
             data[key] = (_sidecar_dims(array, level.values.shape), array)
-        nodes[f"/{level.name}"] = xr.Dataset(data)
+        nodes[f"/{level.name}"] = _encode(
+            xr.Dataset(data), built.value_var, level.chunks
+        )
 
     tree = xr.DataTree.from_dict(nodes)
     tree.attrs["multiscales"] = [built.spec]
     tree.attrs[SUMMARIES_ATTR] = built.summaries
     return tree
+
+
+def _encode(level, value_var, chunks):
+    """Ask whoever writes a level to write it as the builder does.
+
+    A recipe checkpoint writes the tree with xarray, which otherwise picks its
+    own chunk shape and its own time units: the value array would not be
+    chunked as the multiscales block says, and the client would read times
+    in the wrong units. Set on the variables, so any writer honours it.
+    """
+    if "ping_time" in level.variables:
+        # In nanoseconds first. Encoding coarser times to nanosecond units
+        # writes NaT, which a fixture's whole second times are enough to show.
+        times = level["ping_time"].values.astype("datetime64[ns]")
+        level = level.assign_coords(ping_time=times)
+        level["ping_time"].encoding = dict(TIME_ENCODING)
+    level[value_var].encoding = {"chunks": tuple(int(c) for c in chunks)}
+    return level
 
 
 def _sidecar_dims(array, shape):

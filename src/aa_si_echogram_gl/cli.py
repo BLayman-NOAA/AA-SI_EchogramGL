@@ -42,7 +42,13 @@ def main(argv=None):
     check.add_argument("path")
 
     host = sub.add_parser("serve", help="serve a store, and optionally an app")
-    host.add_argument("--store", required=True, help="store directory")
+    host.add_argument("--store", default=None, help="store directory or URL")
+    host.add_argument(
+        "--cache-root",
+        action="append",
+        default=None,
+        help="cache root the catalog may read under, repeatable; any if absent",
+    )
     host.add_argument("--app", default=None, help="directory holding a built app")
     host.add_argument("--host", default="127.0.0.1")
     host.add_argument("--port", type=int, default=8000)
@@ -63,7 +69,9 @@ def main(argv=None):
     if args.command == "validate":
         return _validate(args.path)
     if args.command == "serve":
-        return serve_module.serve(args.store, args.app, args.host, args.port)
+        return serve_module.serve(
+            args.store, args.app, args.host, args.port, args.cache_root
+        )
     if args.command == "colormaps":
         return _colormaps(args)
 

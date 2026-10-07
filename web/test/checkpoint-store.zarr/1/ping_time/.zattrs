@@ -1,0 +1,7 @@
+{
+  "units": "milliseconds since 2024-06-01",
+  "calendar": "proleptic_gregorian",
+  "_ARRAY_DIMENSIONS": [
+    "ping_time"
+  ]
+}

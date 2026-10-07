@@ -108,6 +108,13 @@ export interface XSource {
   xDistance?: Float64Array;
   /** Source pings this level merges into one, from the multiscales factors. */
   factor?: number;
+  /**
+   * Nanoseconds a time axis counts from. Absent means the first ping.
+   *
+   * A view holding several datasets gives them one origin, or a ping at the
+   * same instant in two of them would land at two different x values.
+   */
+  epoch?: number;
 }
 
 /**
@@ -151,7 +158,7 @@ function xValues(unit: XUnit, source: XSource): Float64Array {
     }
     return source.xDistance;
   }
-  const epoch = source.pingTime[0];
+  const epoch = source.epoch ?? source.pingTime[0];
   return Float64Array.from(source.pingTime, (t) => (t - epoch) / 1e9);
 }
 

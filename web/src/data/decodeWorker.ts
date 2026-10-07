@@ -50,13 +50,13 @@ async function handle(request: DecodeRequest) {
     // answer is two dimensional wherever the axis happened to sit.
     const order = request.order ?? { channel: 0, ping: 1, sample: 2 };
     const selection: (number | zarr.Slice)[] = [];
-    selection[order.channel] = request.channel;
+    if (order.channel >= 0) selection[order.channel] = request.channel;
     selection[order.ping] = zarr.slice(request.pings[0], request.pings[1]);
     selection[order.sample] = zarr.slice(request.samples[0], request.samples[1]);
 
     const chunk = await zarr.get(array, selection, { signal: controller.signal });
     const data = request.convert
-      ? toFloat16Bits(chunk.data as ArrayLike<number>, NODATA)
+      ? toFloat16Bits(chunk.data as ArrayLike<number | bigint>, NODATA)
       : asBits(chunk.data);
     const result: DecodeResult = {
       id: request.id,
@@ -74,22 +74,47 @@ async function handle(request: DecodeRequest) {
   }
 }
 
+/**
+ * Stores and arrays a worker keeps open.
+ *
+ * Bounded, because a view laying out a mapped step reads from one store per
+ * file and can pass through thousands of them in a session.
+ */
+const OPEN_LIMIT = 64;
+
 function open(request: DecodeRequest) {
-  let store = stores.get(request.href);
+  let store = touch(stores, request.href);
   if (!store) {
     store = new PriorityStore(new FetchStore(request.href));
-    stores.set(request.href, store);
+    keep(stores, request.href, store);
   }
   const key = `${request.href}|${request.path}|${request.valueName}`;
-  let held = arrays.get(key);
-  if (!held) {
+  let found = touch(arrays, key);
+  if (!found) {
     // An empty path is the root, which is where a plain dataset keeps its
     // values. Resolving against it would append a slash and miss.
     const group = request.path ? zarr.root(store).resolve(request.path) : zarr.root(store);
-    held = zarr.open(group.resolve(request.valueName), { kind: 'array' });
-    arrays.set(key, held);
+    found = zarr.open(group.resolve(request.valueName), { kind: 'array' });
+    keep(arrays, key, found);
+    // A failed open is not kept, so the next request asks again.
+    found.catch(() => arrays.delete(key));
   }
-  return held;
+  return found;
+}
+
+/** Read an entry and mark it most recently used. */
+function touch<T>(map: Map<string, T>, key: string): T | undefined {
+  const found = map.get(key);
+  if (found === undefined) return undefined;
+  map.delete(key);
+  map.set(key, found);
+  return found;
+}
+
+/** Add an entry, dropping the least recently used past the limit. */
+function keep<T>(map: Map<string, T>, key: string, value: T) {
+  map.set(key, value);
+  while (map.size > OPEN_LIMIT) map.delete(map.keys().next().value!);
 }
 
 function post(result: DecodeResult, transfer: Transferable[] = []) {

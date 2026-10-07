@@ -1,0 +1,242 @@
+{
+  "multiscales": [
+    {
+      "name": "Sv",
+      "axes": [
+        {
+          "name": "channel",
+          "type": "channel",
+          "indexable": true
+        },
+        {
+          "name": "ping",
+          "type": "time"
+        },
+        {
+          "name": "sample",
+          "type": "space",
+          "unit": "meter"
+        }
+      ],
+      "datasets": [
+        {
+          "path": "0",
+          "factors": {
+            "ping": 1,
+            "sample": 1
+          },
+          "chunks": [
+            1,
+            32,
+            12
+          ]
+        },
+        {
+          "path": "1",
+          "factors": {
+            "ping": 2,
+            "sample": 1
+          },
+          "chunks": [
+            1,
+            16,
+            12
+          ]
+        }
+      ],
+      "aggregation": "linear_mean",
+      "nodata": -9999.0,
+      "nodataThreshold": -5000.0,
+      "dataType": "MVBS",
+      "channelDim": "channel",
+      "verticalRef": "depth",
+      "rangeVar": "depth",
+      "validXAxes": [
+        "datetime",
+        "seconds",
+        "pings",
+        "bins"
+      ],
+      "validYAxes": [
+        "meters",
+        "range_sample",
+        "bins"
+      ],
+      "histRange": [
+        -120.0,
+        0.0
+      ],
+      "histBins": 32,
+      "channelNames": [
+        "chan0",
+        "chan1"
+      ]
+    }
+  ],
+  "chunkSummaries": {
+    "0": {
+      "0.0.0": {
+        "allNodata": false,
+        "min": -80.0,
+        "max": -76.83999633789062,
+        "count": 217,
+        "hist": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          89,
+          128,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "1.0.0": {
+        "allNodata": false,
+        "min": -70.0,
+        "max": -66.83999633789062,
+        "count": 217,
+        "hist": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          168,
+          49,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "1": {
+      "0.0.0": {
+        "allNodata": false,
+        "min": -79.94971466064453,
+        "max": -76.88970947265625,
+        "count": 112,
+        "hist": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          42,
+          70,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "1.0.0": {
+        "allNodata": false,
+        "min": -69.94971466064453,
+        "max": -66.88970947265625,
+        "count": 112,
+        "hist": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          89,
+          23,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  }
+}

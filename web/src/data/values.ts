@@ -30,15 +30,32 @@ export const NODATA = -9999;
  * and the gaps are NaN.
  */
 export function toFloat16Bits(
-  data: ArrayLike<number>,
+  data: ArrayLike<number | bigint>,
   nodata = NODATA,
 ): Uint16Array<ArrayBuffer> {
   const half = new Float16Array(data.length);
   for (let i = 0; i < data.length; i += 1) {
-    const value = data[i];
+    // A label written as int64 decodes to bigints, which are always finite.
+    const raw = data[i];
+    const value = typeof raw === 'bigint' ? Number(raw) : raw;
     half[i] = Number.isFinite(value) ? value : nodata;
   }
   return new Uint16Array(half.buffer);
+}
+
+/**
+ * One float16 value from its bits.
+ *
+ * Written out rather than read through Float16Array, so a readout works on a
+ * runtime that has none.
+ */
+export function halfToNumber(bits: number): number {
+  const sign = bits & 0x8000 ? -1 : 1;
+  const exponent = (bits >> 10) & 0x1f;
+  const fraction = bits & 0x3ff;
+  if (exponent === 0) return sign * fraction * 2 ** -24;
+  if (exponent === 0x1f) return fraction ? Number.NaN : sign * Infinity;
+  return sign * (1 + fraction / 1024) * 2 ** (exponent - 15);
 }
 
 /** Whether this runtime can convert at all. Float16Array is recent. */

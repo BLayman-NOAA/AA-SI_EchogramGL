@@ -5,7 +5,7 @@ import {
   MIN_EXAGGERATION,
   exaggerationAt,
   toPosition,
-} from '../src/shell/controls/aspect';
+} from '../src/panel/controls/aspect';
 
 describe('exaggeration slider', () => {
   it('spans the ends of its range', () => {

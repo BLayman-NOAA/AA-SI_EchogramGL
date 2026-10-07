@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { FetchStore } from '../src/data/FetchStore';
+import { FetchStore, NETWORK_RETRIES } from '../src/data/FetchStore';
 import { openEchogramStore } from '../src/data/store';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -14,6 +14,7 @@ const root = path.join(here, 'fixture-store.zarr');
 
 let server: Server;
 let origin: string;
+let flakyRequests = 0;
 
 beforeAll(async () => {
   server = createServer(async (request, response) => {
@@ -21,6 +22,16 @@ beforeAll(async () => {
     if (name === '/forbidden') {
       response.statusCode = 403;
       response.end();
+      return;
+    }
+    // A connection dropped with no response, which fetch reports as a
+    // TypeError: once for /flaky, every time for /dropped.
+    if (name === '/dropped' || (name === '/flaky' && flakyRequests++ === 0)) {
+      request.socket.destroy();
+      return;
+    }
+    if (name === '/flaky') {
+      response.end('recovered');
       return;
     }
     try {
@@ -76,6 +87,19 @@ describe('FetchStore', () => {
     // draw an echogram full of holes and report no problem.
     const store = new FetchStore(origin);
     await expect(store.get('/forbidden')).rejects.toThrow(/403/);
+  });
+
+  it('retries a dropped connection', async () => {
+    const store = new FetchStore(origin);
+    const bytes = await store.get('/flaky');
+    expect(new TextDecoder().decode(bytes)).toBe('recovered');
+  });
+
+  it('names the url when a connection keeps dropping', async () => {
+    const store = new FetchStore(origin);
+    await expect(store.get('/dropped')).rejects.toThrow(
+      `for ${origin}dropped after ${NETWORK_RETRIES + 1} attempts`,
+    );
   });
 });
 

@@ -78,6 +78,11 @@ export class TileScheduler<T> {
     return `${this.namespace}|${tileKey(key)}`;
   }
 
+  /** A tile's values if the cache still holds them, without using them. */
+  peek(key: TileKey): T | undefined {
+    return this.cache.peek(key.level, this.cacheKey(key));
+  }
+
   get inFlight(): number {
     return this.inflight.size;
   }

@@ -102,10 +102,10 @@ export const DEFAULT_LOOKAHEAD = 0.5;
 /**
  * Coarser levels held over wider extents.
  *
- * Two, because substitution is capped at two levels: a tile four levels coarse
- * is stretched sixteen to one along the ping axis and reads as a scattering
- * layer rather than as coarseness. Holding a level that would never be drawn
- * from is bytes spent on nothing.
+ * Two: a tile four levels coarse is stretched sixteen to one along the ping
+ * axis and reads as a scattering layer rather than as coarseness, so it is
+ * not worth fetching ahead. A slot still draws from one if it is resident and
+ * nothing finer is.
  */
 export const DEFAULT_DEPTH = 2;
 

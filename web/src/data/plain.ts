@@ -39,6 +39,7 @@ import {
   type Multiscales,
   StoreError,
 } from './contract';
+import { toNanoseconds } from './time';
 import { NODATA, canConvert, toFloat16Bits } from './values';
 
 /** Value variables looked for, best first. */
@@ -163,21 +164,28 @@ export async function openPlainStore(
   };
 }
 
-interface Shape {
+export interface PlainShape {
   channels: number;
   pings: number;
   samples: number;
 }
 
-interface Ramp {
+type Shape = PlainShape;
+
+export interface Ramp {
   /** Metres to the first sample, per channel then ping. */
   start: Float64Array;
   /** Metres between samples, per channel then ping. */
   step: Float64Array;
 }
 
-/** One level over a plain array, converting on the way past. */
-class PlainLevel implements LevelReader {
+/**
+ * One level over a plain array, converting on the way past.
+ *
+ * Exported for a dataset the server described, which arrives with its
+ * geometry and is read the same way from there.
+ */
+export class PlainLevel implements LevelReader {
   readonly index = 0;
 
   /** float64 or float32 with NaN, in whatever order the writer chose. */
@@ -187,7 +195,7 @@ class PlainLevel implements LevelReader {
     readonly entry: LevelEntry,
     private array: Array3,
     readonly valueName: string,
-    private shape: Shape,
+    private shape: PlainShape,
     private order: AxisOrder,
     private ramp: Ramp,
     private sidecars: Record<string, Float64Array>,
@@ -219,7 +227,7 @@ class PlainLevel implements LevelReader {
     const selection = select(this.order, channel, pings, samples);
     const chunk = await zarr.get(this.array, selection, { signal: options.signal });
     return {
-      data: toFloat16Bits(chunk.data as ArrayLike<number>, NODATA),
+      data: toFloat16Bits(chunk.data as ArrayLike<number | bigint>, NODATA),
       pings: pings[1] - pings[0],
       samples: samples[1] - samples[0],
     };
@@ -264,7 +272,8 @@ function select(
   samples: [number, number],
 ): (number | zarr.Slice)[] {
   const selection: (number | zarr.Slice)[] = [];
-  selection[order.channel] = channel;
+  // A variable with no channel axis, such as cluster labels, is one channel.
+  if (order.channel >= 0) selection[order.channel] = channel;
   selection[order.ping] = zarr.slice(pings[0], pings[1]);
   selection[order.sample] = zarr.slice(samples[0], samples[1]);
   return selection;
@@ -420,12 +429,13 @@ async function readCoordinate(
   if (!found) return undefined;
   const chunk = await zarr.get(found.array, null);
   const data = chunk.data;
+  const units = (found.array.attrs as { units?: unknown }).units;
   if (data instanceof BigInt64Array || data instanceof BigUint64Array) {
     const out = new Float64Array(data.length);
     for (let i = 0; i < data.length; i += 1) out[i] = Number(data[i]);
-    return out;
+    return toNanoseconds(out, units);
   }
-  return Float64Array.from(data as ArrayLike<number>);
+  return toNanoseconds(Float64Array.from(data as ArrayLike<number>), units);
 }
 
 /** Channel names, where the coordinate holds strings rather than numbers. */
