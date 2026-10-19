@@ -13,14 +13,20 @@
 
 import { fetchJson } from '../../data/pieces';
 import {
+  type Choice,
   type Resolution,
+  choices,
   describeFound,
+  draws,
+  preferred,
   sameCheckpoint,
+  sourceName,
   toSpec,
 } from './catalog';
 import {
   type ProviderHost,
   type SourceProvider,
+  chooser,
   field,
   freeId,
   remembered,
@@ -37,6 +43,9 @@ export interface StepQuery {
   caches: string[];
   start: string;
   end: string;
+  /** Which output, and which variable in it. Absent asks for the defaults. */
+  output?: string;
+  var?: string;
 }
 
 const REMEMBERED = 'echogram.sources.fields';
@@ -61,6 +70,8 @@ export function resolveUrl(server: string, query: StepQuery): string {
   }
   if (query.start) params.set('start', query.start);
   if (query.end) params.set('end', query.end);
+  if (query.output) params.set('output', query.output);
+  if (query.var) params.set('var', query.var);
   return new URL(`api/resolve?${params}`, server).href;
 }
 
@@ -124,9 +135,15 @@ function mountRecipe(server: string, host: ProviderHost): HTMLElement {
     placeholder: 'cache roots, comma separated',
     title: 'Cache roots to search instead of a recipe, newest computation first',
   });
-  const add = doc.createElement('button');
-  add.type = 'submit';
-  add.textContent = 'add step';
+  const find = doc.createElement('button');
+  find.type = 'submit';
+  find.textContent = 'find';
+  find.title = 'Find the step, then choose what of it to add';
+  // What the last find offered, and what it was asked as.
+  let found: { query: StepQuery; resolution: Resolution } | undefined;
+  const choose = chooser((choice) => {
+    if (found) void addChoice(found.query, found.resolution, choice);
+  });
   const refresh = doc.createElement('button');
   refresh.type = 'button';
   refresh.textContent = 'refresh';
@@ -140,7 +157,8 @@ function mountRecipe(server: string, host: ProviderHost): HTMLElement {
     start.label,
     end.label,
     caches.label,
-    add,
+    find,
+    choose.element,
     refresh,
     list,
     note,
@@ -183,19 +201,29 @@ function mountRecipe(server: string, host: ProviderHost): HTMLElement {
           .catch((error) => host.showError(error)),
     );
 
+  const fields = () =>
+    Object.fromEntries(Object.entries(inputsByName).map(([name, input]) => [name, input.value]));
+
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    memory.write(
-      Object.fromEntries(
-        Object.entries(inputsByName).map(([name, input]) => [name, input.value]),
-      ),
-    );
-    void addStep(read());
+    memory.write({ ...memory.read(), ...fields() });
+    void findStep(read());
+  });
+  // What was found was found for the fields as they were.
+  const typed = new Set<EventTarget>(Object.values(inputsByName));
+  form.addEventListener('input', (event) => {
+    if (event.target && typed.has(event.target)) {
+      found = undefined;
+      choose.clear();
+    }
   });
   refresh.addEventListener('click', () => void refreshSteps());
 
-  async function addStep(query: StepQuery) {
+  /** Resolve a step and offer what it holds; a step with one thing adds it. */
+  async function findStep(query: StepQuery) {
     note.textContent = '';
+    found = undefined;
+    choose.clear();
     if (!query.step) {
       note.textContent = 'name a step';
       return;
@@ -203,17 +231,42 @@ function mountRecipe(server: string, host: ProviderHost): HTMLElement {
     try {
       note.textContent = `resolving ${query.step}...`;
       const resolution = await fetchJson<Resolution>(resolveUrl(server, query));
+      const offered = resolution.status === 'found' ? choices(resolution) : [];
+      if (!offered.length) {
+        note.textContent = describeMiss(resolution);
+        return;
+      }
+      found = { query, resolution };
+      if (offered.length === 1) {
+        await addChoice(query, resolution, offered[0]);
+        return;
+      }
+      choose.offer(offered, preferred(offered, resolution, memory.read()));
+      note.textContent = `${query.step}: ${offered.length} things to draw; choose one and add it`;
+    } catch (error) {
+      note.textContent = '';
+      host.showError(error);
+    }
+  }
+
+  /** Add one choice of a found step, asking again unless it is what was drawn. */
+  async function addChoice(query: StepQuery, first: Resolution, choice: Choice) {
+    const asked: StepQuery = { ...query, output: choice.output || undefined, var: choice.var };
+    try {
+      const resolution = draws(first, choice)
+        ? first
+        : await fetchJson<Resolution>(resolveUrl(server, asked));
       if (resolution.status !== 'found' || !resolution.kind) {
         note.textContent = describeMiss(resolution);
         return;
       }
-      const id = freeId(host.sourceIds, query.step);
+      const id = freeId(host.sourceIds, sourceName(resolution));
       await host.addSource(id, toSpec(server, resolution));
-      steps.set(id, { query, resolution });
+      steps.set(id, { query: asked, resolution });
+      memory.write({ ...memory.read(), output: choice.output, var: choice.var ?? '' });
       note.textContent = describeFound(resolution);
       relist();
     } catch (error) {
-      note.textContent = '';
       host.showError(error);
     }
   }

@@ -13,6 +13,36 @@ import type { PieceSetSpec } from '../../data/pieces';
 /** How an output can be drawn. */
 export type OutputKind = 'pyramid' | 'dataset';
 
+/** A variable of a dataset output the viewer can draw. */
+export interface OutputVariable {
+  name: string;
+  /** What its values are, which decides how a new layer colors it. */
+  kind: 'sv' | 'mvbs' | 'labels';
+  dims: string[];
+  /** Null for a variable with no channel axis, such as cluster labels. */
+  channels: number | null;
+  samples: number;
+}
+
+/** One output of a step, and whether and how it can be drawn. */
+export interface Output {
+  name: string;
+  format: string;
+  kind: OutputKind | null;
+  reason?: string;
+  /** For a dataset, what it holds that can be drawn. */
+  variables?: OutputVariable[];
+  /** The variable drawn when none is named. */
+  default?: string | null;
+}
+
+/** One thing a resolution offers to draw: an output, and for a dataset a variable. */
+export interface Choice {
+  output: string;
+  var?: string;
+  label: string;
+}
+
 /** One dataset the server found, placed in time and mounted. */
 export interface Instance {
   /** The instance's hash, unique within a step. */
@@ -46,9 +76,11 @@ export interface Resolution {
   status: 'found' | 'not_run' | 'never_run';
   stepHash?: string;
   fannedOut?: boolean;
-  outputs?: { name: string; format: string; kind: OutputKind | null; reason?: string }[];
+  outputs?: Output[];
   output?: string | null;
   kind?: OutputKind | null;
+  /** The variable drawn, for a dataset output. */
+  var?: string | null;
   createdAt?: string | null;
   /** A pyramid's location and mount. */
   store?: string;
@@ -77,7 +109,7 @@ export function toSpec(server: string, resolution: Resolution): SourceInput {
     return new URL(`mount/${resolution.mount}/`, server).href;
   }
   const spec: PieceSetSpec = {
-    name: resolution.step,
+    name: sourceName(resolution),
     pieces: (resolution.instances ?? []).map((instance) => ({
       id: instance.id,
       label: instance.item ?? undefined,
@@ -94,6 +126,69 @@ export function toSpec(server: string, resolution: Resolution): SourceInput {
   return spec;
 }
 
+/**
+ * What a resolution is called as a source.
+ *
+ * The step, and the variable after it when it is not the one drawn by
+ * default, so cluster labels added beside the MVBS of the same step read as
+ * `embed_results:ml_dataset_hdbscan_results_grid`.
+ */
+export function sourceName(resolution: Resolution): string {
+  const output = resolution.outputs?.find((item) => item.name === resolution.output);
+  const named = resolution.var && resolution.var !== output?.default;
+  return named ? `${resolution.step}:${resolution.var}` : resolution.step;
+}
+
+/**
+ * Everything a resolution offers to draw, in the server's order.
+ *
+ * A pyramid is one choice. A dataset is one choice per drawable variable.
+ * Outputs the viewer cannot draw are left out; `describeMiss` says why.
+ */
+export function choices(resolution: Resolution): Choice[] {
+  const found: Choice[] = [];
+  for (const output of resolution.outputs ?? []) {
+    if (output.kind === 'pyramid') {
+      found.push({ output: output.name, label: `${output.name} (pyramid)` });
+    } else if (output.kind === 'dataset') {
+      for (const variable of output.variables ?? []) {
+        found.push({
+          output: output.name,
+          var: variable.name,
+          label: `${output.name}: ${variable.name} (${KINDS[variable.kind] ?? variable.kind})`,
+        });
+      }
+    }
+  }
+  // A pyramid opened by path is drawable but lists no outputs.
+  if (!found.length && resolution.kind === 'pyramid') {
+    found.push({ output: resolution.output ?? '', label: `${resolution.step} (pyramid)` });
+  }
+  return found;
+}
+
+const KINDS: Record<string, string> = { sv: 'Sv', mvbs: 'MVBS', labels: 'labels' };
+
+/**
+ * Which choice to select first: the one remembered if it is on offer, else
+ * the one the server drew.
+ */
+export function preferred(
+  offered: Choice[],
+  resolution: Resolution,
+  remembered?: { output?: string; var?: string },
+): number {
+  const at = (output?: string | null, variable?: string | null) =>
+    offered.findIndex(
+      (choice) => choice.output === (output ?? '') && (choice.var ?? null) === (variable ?? null),
+    );
+  // Remembered fields are strings, so no variable is stored as empty.
+  const kept = remembered?.output ? at(remembered.output, remembered.var || null) : -1;
+  if (kept >= 0) return kept;
+  const drawn = at(resolution.output, resolution.var);
+  return Math.max(drawn, 0);
+}
+
 /** One line saying what was found. */
 export function describeFound(resolution: Resolution): string {
   const count = resolution.instances?.length;
@@ -103,12 +198,22 @@ export function describeFound(resolution: Resolution): string {
   const skipped = resolution.skipped?.length
     ? `; ${resolution.skipped.length} skipped, first: ${resolution.skipped[0].error}`
     : '';
-  return `${resolution.step}: ${files}${size}${written}${skipped}`;
+  return `${sourceName(resolution)}: ${files}${size}${written}${skipped}`;
+}
+
+/** Whether a resolution already draws a choice, so asking again is not needed. */
+export function draws(resolution: Resolution, choice: Choice): boolean {
+  return (
+    (resolution.output ?? '') === choice.output &&
+    (resolution.var ?? undefined) === choice.var
+  );
 }
 
 /** Whether two resolutions name the same data. */
 export function sameCheckpoint(a: Resolution, b: Resolution): boolean {
   const key = (r: Resolution) =>
-    [r.stepHash, r.createdAt, r.mount, ...(r.instances ?? []).map((i) => i.id)].join('|');
+    [r.stepHash, r.createdAt, r.mount, r.var, ...(r.instances ?? []).map((i) => i.id)].join(
+      '|',
+    );
   return key(a) === key(b);
 }

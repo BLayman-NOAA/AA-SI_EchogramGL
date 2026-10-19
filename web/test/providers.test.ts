@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { isPieceSet } from '../src/data/pieces';
 import {
   type Resolution,
+  choices,
+  draws,
+  preferred,
   sameCheckpoint,
+  sourceName,
   toSpec,
 } from '../src/shell/providers/catalog';
 import { browserReadable, nameOf, openUrl } from '../src/shell/providers/paths';
@@ -29,6 +33,17 @@ describe('asking the server', () => {
     expect(url.searchParams.has('end')).toBe(false);
     // A recipe names its own caches.
     expect(url.searchParams.has('cache')).toBe(false);
+  });
+
+  it('names an output and a variable once one is chosen', () => {
+    const plain = new URL(resolveUrl('http://127.0.0.1:5173/', query));
+    expect(plain.searchParams.has('output')).toBe(false);
+    expect(plain.searchParams.has('var')).toBe(false);
+    const chosen = new URL(
+      resolveUrl('http://127.0.0.1:5173/', { ...query, output: 'ds_normalized', var: 'grid' }),
+    );
+    expect(chosen.searchParams.get('output')).toBe('ds_normalized');
+    expect(chosen.searchParams.get('var')).toBe('grid');
   });
 
   it('names cache roots when there is no recipe', () => {
@@ -115,6 +130,93 @@ describe('telling a new run from the same one', () => {
     expect(sameCheckpoint(resolution, rerun)).toBe(false);
     expect(sameCheckpoint(resolution, { ...resolution, stepHash: 'def' })).toBe(false);
   });
+
+  it('sees another variable of the same run as other data', () => {
+    expect(sameCheckpoint({ ...resolution, var: 'Sv' }, { ...resolution, var: 'grid' })).toBe(
+      false,
+    );
+  });
+});
+
+describe('choosing what of a step to draw', () => {
+  const GRID = 'ml_dataset_hdbscan_results_grid';
+  const variable = (name: string, kind: 'sv' | 'mvbs' | 'labels', channels: number | null) => ({
+    name,
+    kind,
+    dims: channels === null ? ['ping_time', 'echo_range'] : ['channel', 'ping_time', 'echo_range'],
+    channels,
+    samples: 149,
+  });
+  // What the embedding step of the HB1603 example answers.
+  const embed: Resolution = {
+    mode: 'recipe',
+    step: 'embed_results',
+    status: 'found',
+    kind: 'dataset',
+    output: 'ds_normalized',
+    var: 'Sv',
+    outputs: [
+      {
+        name: 'ds_normalized',
+        format: 'zarr',
+        kind: 'dataset',
+        variables: [variable('Sv', 'mvbs', 2), variable(GRID, 'labels', null)],
+        default: 'Sv',
+      },
+      {
+        name: 'gridded_results',
+        format: 'zarr_da',
+        kind: 'dataset',
+        variables: [variable('_da', 'labels', null)],
+        default: '_da',
+      },
+      { name: 'fit', format: 'pickle', kind: null, reason: 'a pickled output' },
+    ],
+  };
+
+  it('offers every drawable variable of every output, and nothing undrawable', () => {
+    expect(choices(embed)).toEqual([
+      { output: 'ds_normalized', var: 'Sv', label: 'ds_normalized: Sv (MVBS)' },
+      { output: 'ds_normalized', var: GRID, label: `ds_normalized: ${GRID} (labels)` },
+      { output: 'gridded_results', var: '_da', label: 'gridded_results: _da (labels)' },
+    ]);
+  });
+
+  it('offers a pyramid as one choice, with or without outputs listed', () => {
+    const listed: Resolution = {
+      mode: 'recipe',
+      step: 'survey_echogram_store',
+      status: 'found',
+      kind: 'pyramid',
+      output: 'pyramid',
+      outputs: [{ name: 'pyramid', format: 'zarr', kind: 'pyramid' }],
+    };
+    expect(choices(listed)).toEqual([{ output: 'pyramid', label: 'pyramid (pyramid)' }]);
+    const byPath: Resolution = { mode: 'path', step: 'p.zarr', status: 'found', kind: 'pyramid' };
+    expect(choices(byPath)).toEqual([{ output: '', label: 'p.zarr (pyramid)' }]);
+    expect(draws(byPath, choices(byPath)[0])).toBe(true);
+  });
+
+  it('selects the remembered choice when it is offered, else what was drawn', () => {
+    const offered = choices(embed);
+    expect(preferred(offered, embed)).toBe(0);
+    expect(preferred(offered, embed, { output: 'ds_normalized', var: GRID })).toBe(1);
+    expect(preferred(offered, embed, { output: 'elsewhere', var: 'x' })).toBe(0);
+  });
+
+  it('knows when the first answer already draws the choice', () => {
+    const [sv, grid] = choices(embed);
+    expect(draws(embed, sv)).toBe(true);
+    expect(draws(embed, grid)).toBe(false);
+  });
+
+  it('names a source by its step, and by its variable when not the default', () => {
+    expect(sourceName(embed)).toBe('embed_results');
+    const labels = { ...embed, var: GRID, instances: [] };
+    expect(sourceName(labels)).toBe(`embed_results:${GRID}`);
+    const spec = toSpec('http://127.0.0.1:8000/', labels);
+    expect(isPieceSet(spec) && spec.name).toBe(`embed_results:${GRID}`);
+  });
 });
 
 describe('what the viewer opens for a resolution', () => {
@@ -185,6 +287,9 @@ describe('the paths picker', () => {
     const url = new URL(openUrl('http://127.0.0.1:8000/', 'gs://bucket/a b.zarr'));
     expect(url.pathname).toBe('/api/open');
     expect(url.searchParams.get('path')).toBe('gs://bucket/a b.zarr');
+    expect(url.searchParams.has('var')).toBe(false);
+    const chosen = new URL(openUrl('http://127.0.0.1:8000/', 'C:/d.zarr', 'grid'));
+    expect(chosen.searchParams.get('var')).toBe('grid');
   });
 
   it('names a source after the last part of its location', () => {

@@ -24,6 +24,7 @@ import {
   channelsOf,
   colorMode,
   filterFor,
+  labelFloor,
   pipelineConstants,
   pipelineKey,
 } from '../app/layers';
@@ -38,8 +39,8 @@ import source from './passes/value.wgsl?raw';
 /** Bytes in ViewUniforms: a mat3x3f padded to 48, then one f32. */
 const VIEW_BYTES = 64;
 
-/** Bytes in LayerParams. */
-const PARAMS_BYTES = 32;
+/** Bytes in PassParams: eight floats, then the label floor, padded to 16. */
+const PARAMS_BYTES = 48;
 
 /** Bytes in TileUniforms: two vec2f and two u32, padded to a 16 byte multiple. */
 const TILE_BYTES = 32;
@@ -387,15 +388,7 @@ export class LayerStack {
   }
 
   private writeParams(entry: LayerEntry) {
-    const block = new Float32Array(PARAMS_BYTES / 4);
-    block[0] = entry.layer.clim[0];
-    block[1] = entry.layer.clim[1];
-    block[2] = this.nodataThreshold;
-    block[3] = entry.layer.opacity;
-    block[4] = this.nodataColor[0];
-    block[5] = this.nodataColor[1];
-    block[6] = this.nodataColor[2];
-    block[7] = 1;
+    const block = paramsBlock(entry.layer, this.nodataThreshold, this.nodataColor);
     this.device.queue.writeBuffer(entry.params, 0, block);
   }
 
@@ -636,6 +629,32 @@ export function sameShape(a: LayerEntry[], b: LayerEntry[]): boolean {
       entry.groups === other.groups
     );
   });
+}
+
+/**
+ * A layer's PassParams as the shader reads them.
+ *
+ * The limits, the nodata threshold, the opacity, the nodata color and the
+ * label floor. Everything here changes without a recompile.
+ */
+export function paramsBlock(
+  layer: Layer,
+  nodataThreshold: number,
+  nodataColor: [number, number, number],
+): Float32Array<ArrayBuffer> {
+  const block = new Float32Array(PARAMS_BYTES / 4);
+  block[0] = layer.clim[0];
+  block[1] = layer.clim[1];
+  block[2] = nodataThreshold;
+  block[3] = layer.opacity;
+  block[4] = nodataColor[0];
+  block[5] = nodataColor[1];
+  block[6] = nodataColor[2];
+  block[7] = 1;
+  // A float32 uniform cannot hold -Infinity usefully across every driver, and
+  // nothing a palette indexes is anywhere near this.
+  block[8] = Math.max(labelFloor(layer), -1e30);
+  return block;
 }
 
 function tileName(level: number, channel: number, key: string): string {

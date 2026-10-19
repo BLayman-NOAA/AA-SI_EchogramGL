@@ -20,6 +20,14 @@ import type { BlendMode } from '../render/blend';
 export type NodataMode = 'paint' | 'transparent';
 
 /**
+ * Whether a label layer draws its noise label, -1.
+ *
+ * Hidden by default: over the MVBS the labels were computed from, noise is
+ * most of the picture, and hiding it lets the backscatter show through.
+ */
+export type NoiseMode = 'hide' | 'show';
+
+/**
  * How a layer turns values into color.
  *
  * A tint encodes which channel rather than what value, which is why its legend
@@ -85,6 +93,8 @@ export interface LayerSpec {
   nodata?: NodataMode;
   /** How the value texture is sampled. A palette forces nearest. */
   filter?: GPUFilterMode;
+  /** For a palette layer, whether noise draws. See NoiseMode. */
+  noise?: NoiseMode;
 }
 
 /** A layer with every question answered. */
@@ -102,6 +112,7 @@ export interface Layer {
   blend: BlendMode;
   nodata: NodataMode;
   filter: GPUFilterMode;
+  noise: NoiseMode;
 }
 
 export interface LayerDefaults {
@@ -168,6 +179,7 @@ export function resolveLayers(
     blend: spec.blend ?? 'over',
     nodata: spec.nodata ?? (index === 0 ? 'paint' : 'transparent'),
     filter: spec.filter ?? defaults.filter,
+    noise: spec.noise ?? 'hide',
   }));
 }
 
@@ -194,6 +206,18 @@ export function pipelineConstants(layer: Layer): Record<string, number> {
 }
 
 const TRANSFORMS: Record<Transform, number> = { value: 0, difference: 1 };
+
+/**
+ * Labels below this are drawn as nodata.
+ *
+ * Labels are whole numbers, so the floor sits half way between: above -1
+ * hides noise, below it shows it. A layer that is not a palette shows
+ * everything, since its values are not labels.
+ */
+export function labelFloor(layer: Layer): number {
+  if (!isCategorical(layer)) return -Infinity;
+  return layer.noise === 'show' ? -1.5 : -0.5;
+}
 
 /** The layers that draw, in draw order. */
 export function drawn(layers: Layer[]): Layer[] {

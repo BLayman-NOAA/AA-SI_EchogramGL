@@ -8,10 +8,20 @@
  */
 
 import { fetchJson } from '../../data/pieces';
-import { type Resolution, describeFound, toSpec } from './catalog';
+import {
+  type Choice,
+  type Resolution,
+  choices,
+  describeFound,
+  draws,
+  preferred,
+  sourceName,
+  toSpec,
+} from './catalog';
 import {
   type ProviderHost,
   type SourceProvider,
+  chooser,
   field,
   freeId,
   remembered,
@@ -25,9 +35,11 @@ export function browserReadable(location: string): boolean {
   return /^https?:\/\//i.test(location) || location.startsWith('/');
 }
 
-/** The `/api/open` URL for a path the server reads. */
-export function openUrl(server: string, path: string): string {
-  return new URL(`api/open?${new URLSearchParams({ path })}`, server).href;
+/** The `/api/open` URL for a path the server reads, and the variable to draw. */
+export function openUrl(server: string, path: string, variable?: string): string {
+  const params = new URLSearchParams({ path });
+  if (variable) params.set('var', variable);
+  return new URL(`api/open?${params}`, server).href;
 }
 
 /** A source id from a location: its last part. */
@@ -62,11 +74,21 @@ function mountPaths(server: string, host: ProviderHost, autoOpen: boolean): HTML
   });
   const add = doc.createElement('button');
   add.type = 'submit';
-  add.textContent = 'add';
+  add.textContent = 'open';
+  add.title = 'Open a store, or list what a dataset holds to choose from';
+  // The dataset the last open listed, and where it is.
+  let found: { where: string; resolution: Resolution } | undefined;
+  const choose = chooser((choice) => {
+    if (found) void addChoice(found.where, found.resolution, choice);
+  });
   const list = doc.createElement('span');
   const note = doc.createElement('span');
   note.className = 'egl-note';
-  form.append(location.label, add, list, note);
+  form.append(location.label, add, choose.element, list, note);
+  location.input.addEventListener('input', () => {
+    found = undefined;
+    choose.clear();
+  });
 
   const memory = remembered(REMEMBERED);
   location.input.value = memory.read().location ?? '/store/';
@@ -86,34 +108,67 @@ function mountPaths(server: string, host: ProviderHost, autoOpen: boolean): HTML
           .catch((error) => host.showError(error)),
     );
 
+  /**
+   * Open what is at a location. A dataset holding several variables lists
+   * them to choose from; anything else is added straight away.
+   */
   async function open(where: string) {
     note.textContent = '';
+    found = undefined;
+    choose.clear();
     if (!where) {
       note.textContent = 'name a store or path';
       return;
     }
     try {
-      const id = freeId(host.sourceIds, nameOf(where));
       if (browserReadable(where)) {
+        const id = freeId(host.sourceIds, nameOf(where));
         await host.addSource(id, where);
-      } else {
-        note.textContent = `opening ${where}...`;
-        const resolution = await fetchJson<Resolution>(openUrl(server, where));
-        await host.addSource(id, toSpec(server, resolution));
-        note.textContent = describeFound(resolution);
+        added.push(id);
+        relist();
+        return;
       }
-      added.push(id);
-      relist();
+      note.textContent = `opening ${where}...`;
+      const resolution = await fetchJson<Resolution>(openUrl(server, where));
+      const offered = choices(resolution);
+      if (offered.length > 1) {
+        found = { where, resolution };
+        choose.offer(offered, preferred(offered, resolution, memory.read()));
+        note.textContent = `${resolution.step}: ${offered.length} variables; choose one and add it`;
+        return;
+      }
+      await addResolution(resolution);
     } catch (error) {
       note.textContent = '';
       host.showError(error);
     }
   }
 
+  /** Add one variable of a listed dataset, asking again unless it is what was drawn. */
+  async function addChoice(where: string, first: Resolution, choice: Choice) {
+    try {
+      const resolution = draws(first, choice)
+        ? first
+        : await fetchJson<Resolution>(openUrl(server, where, choice.var));
+      await addResolution(resolution);
+      memory.write({ ...memory.read(), output: choice.output, var: choice.var ?? '' });
+    } catch (error) {
+      host.showError(error);
+    }
+  }
+
+  async function addResolution(resolution: Resolution) {
+    const id = freeId(host.sourceIds, sourceName(resolution));
+    await host.addSource(id, toSpec(server, resolution));
+    note.textContent = describeFound(resolution);
+    added.push(id);
+    relist();
+  }
+
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const where = location.input.value.trim();
-    memory.write({ location: where });
+    memory.write({ ...memory.read(), location: where });
     void open(where);
   });
 

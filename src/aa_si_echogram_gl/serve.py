@@ -90,25 +90,29 @@ def make_handler(store_root=None, app_root=None, mounts=None):
             started = time.monotonic()
             request = unquote(urlparse(self.path).path)
             if request.startswith(API_PREFIX):
-                self._api(include_body)
+                self._api(include_body, started)
                 return
             # Not a 404: the client reads a missing chunk as fill, and a mount
             # this server has not handed out is not an empty chunk. After a
             # restart it would draw blank tiles and keep them.
             mount = request[len(MOUNT_PREFIX):].partition("/")[0]
             if request.startswith(MOUNT_PREFIX) and not mounts.known(mount):
-                self.send_error(
-                    HTTPStatus.GONE, "unknown mount; resolve the step again"
+                self._refuse(
+                    HTTPStatus.GONE, "unknown mount; resolve the step again", started
                 )
                 return
-            found = self._resolve()
-            if found is None:
-                self.send_error(HTTPStatus.NOT_FOUND)
+            try:
+                found = self._resolve()
+            except Exception as error:  # noqa: BLE001 - reported to the page
+                # A read that raises would otherwise end this thread with a
+                # traceback and no response, which the browser reports as a
+                # bare failed fetch. A 500 carries the reason to the page.
+                self._refuse(HTTPStatus.INTERNAL_SERVER_ERROR, _reason(error), started)
+                return
+            if found is None or found[1] is None:
+                self._refuse(HTTPStatus.NOT_FOUND, None, started)
                 return
             name, body = found
-            if body is None:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
             read = time.monotonic() - started
 
             try:
@@ -121,17 +125,31 @@ def make_handler(store_root=None, app_root=None, mounts=None):
                     self.wfile.write(body)
             except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
                 # The browser hung up, which the viewer does on purpose when it
-                # stops wanting a tile. One line rather than a traceback, with
-                # the timing that tells a cancellation from a stall.
+                # stops wanting a tile. Logged with the timing that tells a
+                # cancellation from a stall.
                 self.close_connection = True
-                print(
-                    f"{time.strftime('%H:%M:%S')} client closed {self.path} "
-                    f"after {time.monotonic() - started:.2f} s "
-                    f"(store read {read:.2f} s, {len(body)} bytes)",
-                    flush=True,
-                )
+                self._log("closed", started, read, len(body))
+                return
+            self._log(HTTPStatus.OK.value, started, read, len(body))
 
-        def _api(self, include_body):
+        def _refuse(self, status, message, started):
+            """Send an error status, surviving a client that has already gone."""
+            try:
+                self.send_error(status, message)
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+                self.close_connection = True
+            self._log(status.value, started)
+
+        def _log(self, status, started, read=None, size=None):
+            """One line per request: status, path, elapsed, and the store read."""
+            elapsed = time.monotonic() - started
+            detail = "" if read is None else f" (read {read:.2f} s, {size} B)"
+            print(
+                f"{time.strftime('%H:%M:%S')} {status} {self.path} {elapsed:.2f} s{detail}",
+                flush=True,
+            )
+
+        def _api(self, include_body, started):
             """Answer a catalog request with JSON, errors included."""
             parsed = urlparse(self.path)
             request = unquote(parsed.path)
@@ -166,6 +184,7 @@ def make_handler(store_root=None, app_root=None, mounts=None):
                     self.wfile.write(body)
             except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
                 self.close_connection = True
+            self._log(status.value, started)
 
         def _resolve(self):
             """Map a request onto a name and its bytes, or None if there is none."""
@@ -303,19 +322,22 @@ class Mounts:
         self.found = {}
         self.sources = {}
 
-    def add(self, url, storage_options=None, tiled=False, stamp=""):
+    def add(self, url, storage_options=None, tiled=False, stamp="", var=None):
         """Mount a store and return its id.
 
         A tiled mount is a dataset served under the viewer's chunking (see
         `tiles`). An untiled one is a store served as it is, such as a pyramid.
-        The stamp says which writing of the store it is, for its header.
+        The stamp says which writing of the store it is, for its header. A
+        tiled mount serves one variable, so the same dataset with another
+        variable is another mount.
         """
-        mount = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+        key = f"{url}#{var}" if var else url
+        mount = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
         held = self.found.get(mount)
         if held and held[3] != stamp:
             # Written again at the same path: the open reader holds the old.
             self.sources.pop(mount, None)
-        self.found[mount] = (url, storage_options, tiled, stamp)
+        self.found[mount] = (url, storage_options, tiled, stamp, var)
         return mount
 
     def known(self, mount):
@@ -327,9 +349,9 @@ class Mounts:
         if mount not in self.found:
             return None
         if mount not in self.sources:
-            url, options, tiled, _ = self.found[mount]
+            url, options, tiled, _, var = self.found[mount]
             if tiled:
-                self.sources[mount] = tiles.TileSource(url, options)
+                self.sources[mount] = tiles.TileSource(url, options, var)
             else:
                 self.sources[mount] = open_source(url, options)
         return self.sources[mount]
@@ -338,9 +360,12 @@ class Mounts:
         """The viewer's header for a mounted dataset."""
         if mount not in self.found:
             raise LookupError(f"no mount {mount}; resolve the step again")
-        url, options, _, stamp = self.found[mount]
+        url, options, _, stamp, var = self.found[mount]
         return catalog.cached(
-            "describe", url, lambda: describe.describe(url, options), stamp
+            "describe",
+            f"{url}#{var}" if var else url,
+            lambda: describe.describe(url, options, var),
+            stamp,
         )
 
     def check(self, roots):
@@ -388,7 +413,8 @@ def resolve_request(query, mounts):
         tiers, options, _ = catalog.recipe_tiers(recipe, one("config"), *caches)
         mounts.check(tier.root for tier in tiers)
         result = catalog.resolve_recipe(
-            recipe, step, inputs, one("config"), one("output"), window, *caches
+            recipe, step, inputs, one("config"), one("output"), window, *caches,
+            var=one("var"),
         )
     else:
         roots = query.get("cache", [])
@@ -396,7 +422,9 @@ def resolve_request(query, mounts):
             raise catalog.CatalogError("name a recipe, or one or more cache roots")
         mounts.check(roots)
         options = None
-        result = catalog.resolve_cache(roots, step, one("output"), window)
+        result = catalog.resolve_cache(
+            roots, step, one("output"), window, var=one("var")
+        )
 
     return _mount(result, mounts, options)
 
@@ -411,7 +439,7 @@ def open_request(query, mounts):
     if not path:
         raise catalog.CatalogError("name a path")
     mounts.check([path])
-    return _mount(catalog.open_path(path), mounts, None)
+    return _mount(catalog.open_path(path, var=one_of(query, "var")), mounts, None)
 
 
 def _mount(result, mounts, options):
@@ -420,9 +448,19 @@ def _mount(result, mounts, options):
         result["mount"] = mounts.add(result["store"], options)
     for instance in result.get("instances", []):
         instance["mount"] = mounts.add(
-            instance["store"], options, tiled=True, stamp=instance["stamp"]
+            instance["store"],
+            options,
+            tiled=True,
+            stamp=instance["stamp"],
+            var=instance.get("var"),
         )
     return result
+
+
+def one_of(query, name):
+    """The first value of a query parameter, or None."""
+    values = query.get(name)
+    return values[0] if values else None
 
 
 def _nanoseconds(value, default):
@@ -443,6 +481,25 @@ def _normalise(root):
     if "://" in text:
         return text
     return os.path.normcase(os.path.abspath(text)).replace("\\", "/")
+
+
+def _reason(error):
+    """An exception as a status line reason: one line, short."""
+    text = f"{type(error).__name__}: {error}".replace("\r", " ").replace("\n", " ")
+    return text[:300]
+
+
+class Server(ThreadingHTTPServer):
+    """One thread per connection, with room for a burst of them.
+
+    The default backlog of five pending connections is overrun by a browser
+    opening many during a fast zoom, and on Windows an overrun is an immediate
+    reset, which the viewer reports as a failed fetch. Daemon threads, so a
+    read still waiting on a bucket does not hold the process open at exit.
+    """
+
+    request_queue_size = 128
+    daemon_threads = True
 
 
 def _safe(key):
@@ -486,7 +543,7 @@ def serve(store=None, app=None, host="127.0.0.1", port=8000, cache_roots=None):
     """
     source = open_source(store) if store else None
     mounts = Mounts(cache_roots)
-    server = ThreadingHTTPServer((host, port), make_handler(source, app, mounts))
+    server = Server((host, port), make_handler(source, app, mounts))
     bound = server.server_address[1]
     if store:
         print(f"serving {store}")

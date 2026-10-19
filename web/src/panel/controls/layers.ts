@@ -226,10 +226,22 @@ function row(
     colorValue(layer),
     (value) => {
       layer.color = parseColor(value);
+      noise.hidden = !isPalette(layer);
       edited();
     },
   );
   color.title = 'color mode';
+
+  // Only a palette has a noise label to draw or not.
+  const noiseBox = checkbox(layer.noise === 'show', (on) => {
+    layer.noise = on ? 'show' : 'hide';
+    edited();
+  });
+  const noise = window.document.createElement('label');
+  noise.className = 'layer';
+  noise.title = 'draw noise, label -1, rather than letting what is under it show';
+  noise.append(noiseBox, 'noise');
+  noise.hidden = !isPalette(layer);
 
   const blend = select(
     [
@@ -280,6 +292,7 @@ function row(
     channel,
     against,
     color,
+    noise,
     low,
     high,
     blend,
@@ -290,6 +303,10 @@ function row(
     button('remove', actions.remove),
   );
   return line;
+}
+
+function isPalette(layer: LayerSpec): boolean {
+  return Boolean(layer.color && 'palette' in layer.color);
 }
 
 function colorValue(layer: LayerSpec): string {

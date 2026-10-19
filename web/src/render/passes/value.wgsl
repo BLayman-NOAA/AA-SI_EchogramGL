@@ -49,6 +49,9 @@ struct PassParams {
     nodata: f32,
     opacity: f32,
     nodataColor: vec4f,
+    // Labels below this draw as nodata, which is how noise is hidden. Far
+    // below any value for a layer that is not a palette.
+    labelFloor: f32,
 };
 
 @group(0) @binding(0) var<uniform> view: ViewUniforms;
@@ -242,6 +245,9 @@ fn fs_value(in: VertexOut) -> @location(0) vec4f {
         sv = sv - second;
     }
     if (CATEGORICAL) {
+        if (sv < params.labelFloor) {
+            return nodataPixel();
+        }
         var color = paletteColor(sv);
         color.a = color.a * params.opacity;
         return color;

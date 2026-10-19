@@ -9,11 +9,13 @@ import {
   drawn,
   filterFor,
   isCategorical,
+  labelFloor,
   pipelineConstants,
   pipelineKey,
   reorder,
   resolveLayers,
 } from '../src/app/layers';
+import { paramsBlock } from '../src/render/drawLayer';
 
 const DEFAULTS = {
   color: { colormap: 'viridis' } as const,
@@ -216,5 +218,38 @@ describe('the stack', () => {
     const layers = ['a', 'b', 'c'];
     expect(reorder(layers, 1, 1)).toBe(layers);
     expect(reorder(layers, 5, 0)).toBe(layers);
+  });
+});
+
+describe('noise on a label layer', () => {
+  const labels = { palette: 'cluster' } as const;
+
+  it('is hidden unless asked for', () => {
+    const [layer] = stack({ channel: 0, color: labels });
+    expect(layer.noise).toBe('hide');
+    expect(labelFloor(layer)).toBe(-0.5);
+    expect(labelFloor(stack({ channel: 0, color: labels, noise: 'show' })[0])).toBe(-1.5);
+  });
+
+  it('means nothing on a layer that is not a palette', () => {
+    const [layer] = stack({ channel: 0, color: { colormap: 'viridis' } });
+    expect(labelFloor(layer)).toBe(-Infinity);
+  });
+
+  it('changes no pipeline, since it is a uniform', () => {
+    const [hidden] = stack({ channel: 0, color: labels });
+    const [shown] = stack({ channel: 0, color: labels, noise: 'show' });
+    expect(pipelineKey(hidden, 'bgra8unorm')).toBe(pipelineKey(shown, 'bgra8unorm'));
+    expect(pipelineConstants(hidden)).toEqual(pipelineConstants(shown));
+  });
+
+  it('reaches the shader in the params block', () => {
+    const [layer] = stack({ channel: 0, color: labels, clim: [-80, -20], opacity: 0.5 });
+    const block = paramsBlock(layer, -5000, [0.1, 0.2, 0.3]);
+    expect(block.length).toBe(12);
+    expect([...block.slice(0, 4)]).toEqual([-80, -20, -5000, 0.5]);
+    expect(block[8]).toBe(-0.5);
+    const [plain] = stack({ channel: 0 });
+    expect(paramsBlock(plain, -5000, [0, 0, 0])[8]).toBeLessThan(-1e29);
   });
 });

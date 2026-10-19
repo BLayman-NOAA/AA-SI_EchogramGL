@@ -195,6 +195,27 @@ a picker implements.
 its layers' place, color and limits and the view where it is. It is what a
 refresh after a rerun calls.
 
+A source is one variable of one dataset. A dataset holding several, such as
+an embedding step's MVBS and the cluster labels computed from it, is added
+once per variable, and the sources draw over each other wherever their pings
+and depths fall. Nothing has to share a grid: Sv before and after masking,
+MVBS over Sv, or two steps' MVBS overlay the same way. The server lists what
+an output holds under `outputs[i].variables`, and takes `var` on
+`/api/resolve` and `/api/open` to serve one; each variable gets its own mount.
+
+A source of cluster labels opens on the cluster palette. Noise, label -1, is
+drawn as nodata by default, so over the MVBS it lets the backscatter show
+through; a layer's `noise: 'show'` draws it in the palette's noise color.
+
+```ts
+await view.setOptions({
+  layers: [
+    { source: 'mvbs', channel: 1 },
+    { source: 'labels', channel: 0, color: { palette: 'cluster' }, noise: 'hide' },
+  ],
+});
+```
+
 ## What is under the cursor
 
 The panel shows, in the top right corner of the echogram, the time and depth

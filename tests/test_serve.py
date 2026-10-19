@@ -1,5 +1,6 @@
 """Development server tests."""
 
+import http.client
 import socket
 import struct
 import threading
@@ -121,7 +122,7 @@ def test_a_client_hanging_up_is_one_line_not_a_traceback(capsys):
 
         deadline = time.monotonic() + 10
         out = err = ""
-        while "client closed" not in out and time.monotonic() < deadline:
+        while "closed" not in out and time.monotonic() < deadline:
             time.sleep(0.05)
             captured = capsys.readouterr()
             out += captured.out
@@ -131,8 +132,52 @@ def test_a_client_hanging_up_is_one_line_not_a_traceback(capsys):
         server.server_close()
         thread.join(timeout=5)
 
-    assert "client closed /store/0/Sv/0.0.0 after" in out
+    assert " closed /store/0/Sv/0.0.0 " in out
     assert "Traceback" not in err
+
+
+class FailingSource:
+    """A store whose reads raise, as an object store does when a token lapses."""
+
+    def read(self, key):
+        raise RuntimeError("token expired\nsecond line")
+
+
+def test_a_read_that_raises_is_a_500_with_the_reason(capsys):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), serve.make_handler(FailingSource()))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+        connection.request("GET", "/store/0/Sv/0.0.0")
+        response = connection.getresponse()
+        response.read()
+        status, reason = response.status, response.reason
+        connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 500
+    assert reason == "RuntimeError: token expired second line"
+    captured = capsys.readouterr()
+    assert " 500 /store/0/Sv/0.0.0 " in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_every_request_logs_one_line(served, capsys):
+    fetch(f"{served}/store/zarr.json")
+    fetch(f"{served}/store/nothing/here")
+    # The line is written after the response, so the client can be back first.
+    wanted = (" 200 /store/zarr.json ", " 404 /store/nothing/here ")
+    deadline = time.monotonic() + 5
+    out = ""
+    while not all(line in out for line in wanted) and time.monotonic() < deadline:
+        out += capsys.readouterr().out
+        time.sleep(0.02)
+    for line in wanted:
+        assert line in out
 
 
 class FakeFilesystem:

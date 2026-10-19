@@ -144,9 +144,9 @@ def counting(monkeypatch):
     opened = []
     original = catalog._index
 
-    def index(url, options):
+    def index(url, options, var=None):
         opened.append(url)
-        return original(url, options)
+        return original(url, options, var)
 
     monkeypatch.setattr(catalog, "_index", index)
     return opened
@@ -534,3 +534,89 @@ def test_open_refuses_what_is_not_there_or_not_allowed(served, tmp_path):
     outside = urlencode({"path": str(tmp_path / "elsewhere")})
     assert fetch(f"{base}/api/open?{outside}")[0] == 403
     assert fetch(f"{base}/api/open")[0] == 400
+
+
+def labelled(url):
+    """MVBS with a cluster label grid beside it, as embed_results writes it."""
+    ds = file_mvbs(url)
+    grid = np.full((PINGS, ds.sizes["range_sample"]), np.nan)
+    grid[:, :8] = -1
+    grid[:, 8:12] = 0
+    grid[:, 12:16] = 3
+    ds["ml_dataset_hdbscan_results_grid"] = (("ping_time", "range_sample"), grid)
+    ds["ml_dataset_hdbscan_results_grid"].attrs["source_variable"] = "ml_dataset_r"
+    return ds
+
+
+@pytest.fixture
+def embedded(cache):
+    """An embed_results entry beside the template cache's steps."""
+    url = FILES[0]
+    path = write_entry(cache, "embed_results", key("e"), "ds_normalized", "zarr",
+                       NEW, "2026-02-01T00:00:00")
+    write_zarr(labelled(url), path, mode="w", consolidated=True)
+    return cache, path
+
+
+GRID = "ml_dataset_hdbscan_results_grid"
+
+
+def test_a_dataset_output_lists_what_it_can_draw(embedded):
+    cache, _ = embedded
+    found = catalog.resolve_cache([str(cache)], "embed_results")
+    [output] = found["outputs"]
+    kinds = {item["name"]: item["kind"] for item in output["variables"]}
+    assert kinds == {"Sv": "mvbs", GRID: "labels"}
+    assert output["default"] == "Sv"
+    assert found["var"] == "Sv"
+    assert found["instances"][0]["channels"] == 2
+
+
+def test_a_variable_is_chosen_by_name(embedded):
+    cache, _ = embedded
+    found = catalog.resolve_cache([str(cache)], "embed_results", var=GRID)
+    assert found["var"] == GRID
+    [instance] = found["instances"]
+    assert instance["var"] == GRID
+    assert instance["channels"] == 1
+    assert instance["dims"] == ["ping_time", "range_sample"]
+
+
+def test_a_variable_the_output_lacks_is_refused(embedded):
+    cache, _ = embedded
+    with pytest.raises(catalog.CatalogError, match="no variable"):
+        catalog.resolve_cache([str(cache)], "embed_results", var="nothing")
+
+
+def test_a_path_opens_any_of_its_variables(embedded):
+    _, path = embedded
+    found = catalog.open_path(str(path), var=GRID)
+    assert found["var"] == GRID
+    assert {v["name"] for v in found["outputs"][0]["variables"]} == {"Sv", GRID}
+
+
+def test_each_variable_is_its_own_mount(served, embedded):
+    base, cache = served
+    query = {"cache": str(cache), "step": "embed_results"}
+    sv = json.loads(fetch(f"{base}/api/resolve?{urlencode(query)}")[1])
+    labels = json.loads(
+        fetch(f"{base}/api/resolve?{urlencode({**query, 'var': GRID})}")[1]
+    )
+    sv_mount = sv["instances"][0]["mount"]
+    label_mount = labels["instances"][0]["mount"]
+    assert sv_mount != label_mount
+    meta = json.loads(fetch(f"{base}/mount/{label_mount}/{GRID}/.zarray")[1])
+    assert meta["shape"] == [PINGS, 20]
+    header = json.loads(fetch(f"{base}/api/describe/{label_mount}")[1])
+    assert header["kind"] == "labels"
+    assert header["order"]["channel"] is None
+    assert header["dataType"] == "Cluster-MVBS"
+    # The two describe the same pings, so they draw over each other.
+    sv_header = json.loads(fetch(f"{base}/api/describe/{sv_mount}")[1])
+    assert header["sidecars"]["ping_time"] == sv_header["sidecars"]["ping_time"]
+
+
+def test_an_unknown_variable_is_a_bad_request(served, embedded):
+    base, cache = served
+    query = urlencode({"cache": str(cache), "step": "embed_results", "var": "nope"})
+    assert fetch(f"{base}/api/resolve?{query}")[0] == 400

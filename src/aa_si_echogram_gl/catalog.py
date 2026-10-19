@@ -200,7 +200,7 @@ def recipe_tiers(recipe, config=None, user_cache=None, survey_cache=None):
 
 
 def resolve_recipe(recipe, step, inputs=None, config=None, output=None,
-                   window=None, user_cache=None, survey_cache=None):
+                   window=None, user_cache=None, survey_cache=None, var=None):
     """The checkpoint a recipe's current parameters name for one step.
 
     Args:
@@ -212,6 +212,8 @@ def resolve_recipe(recipe, step, inputs=None, config=None, output=None,
         window: Optional (start, end) in nanoseconds since 1970, limiting
             the instances of a fanned out step.
         user_cache, survey_cache: Cache roots in place of the config's.
+        var: Variable of a dataset output to draw, or None for the one the
+            viewer would choose.
 
     Returns:
         dict: The resolution; see `resolution`.
@@ -262,7 +264,9 @@ def resolve_recipe(recipe, step, inputs=None, config=None, output=None,
         "tiers": {tier.name: tier.root for tier in tiers},
     }
     if matched:
-        found = resolution(matched, identity.fanned_out, output, window, options)
+        found = resolution(
+            matched, identity.fanned_out, output, window, options, var
+        )
         return {**result, **found}
 
     if candidates is None:
@@ -278,7 +282,8 @@ def resolve_recipe(recipe, step, inputs=None, config=None, output=None,
     return result
 
 
-def resolve_cache(roots, step, output=None, window=None, storage_options=None):
+def resolve_cache(roots, step, output=None, window=None, storage_options=None,
+                  var=None):
     """The newest computation of a step in some cache roots.
 
     Entries are grouped by fingerprint payload, which is one group per
@@ -287,7 +292,7 @@ def resolve_cache(roots, step, output=None, window=None, storage_options=None):
     Args:
         roots: Cache roots, user tier first.
         step: Step id.
-        output, window: As for `resolve_recipe`.
+        output, window, var: As for `resolve_recipe`.
         storage_options: fsspec options for the roots.
 
     Returns:
@@ -315,19 +320,21 @@ def resolve_cache(roots, step, output=None, window=None, storage_options=None):
     if not fanned_out:
         newest = [max(newest, key=lambda e: e.meta.get("created_at") or "")]
     entries = _first_per_hash(newest)
-    found = resolution(entries, fanned_out, output, window, storage_options)
+    found = resolution(entries, fanned_out, output, window, storage_options, var)
     return {**result, "fannedOut": fanned_out, **found}
 
 
-def open_path(path, storage_options=None):
+def open_path(path, storage_options=None, var=None):
     """What is at a path: a pyramid, or a dataset to draw as one piece.
 
     For a store or dataset named by where it is rather than by the recipe
     step that wrote it. Answers in the shape `resolve_recipe` does, so a
-    client opens either the same way.
+    client opens either the same way, and lists the variables a dataset
+    holds so one can be chosen.
 
     Raises:
         LookupError: If there is nothing at the path.
+        CatalogError: If the dataset holds nothing to draw, or no `var`.
     """
     fs, root = filesystem(path, storage_options)
     if not fs.exists(root):
@@ -338,8 +345,19 @@ def open_path(path, storage_options=None):
         return {**found, "kind": "pyramid", "store": path}
 
     stamp = _path_stamp(fs, root)
+    output = _dataset_output(name, "zarr", path, storage_options, stamp)
+    if not output["kind"]:
+        raise CatalogError(
+            f"{path} is not a dataset the viewer can draw: {output['reason']}"
+        )
+    var = _choose_var(output, var)
     try:
-        record = cached("index", path, lambda: _index(path, storage_options), stamp)
+        record = cached(
+            "index",
+            f"{path}#{var}",
+            lambda: _index(path, storage_options, var),
+            stamp,
+        )
     except Exception as error:
         raise CatalogError(
             f"{path} is not a dataset the viewer can draw: {error}"
@@ -355,6 +373,9 @@ def open_path(path, storage_options=None):
     }
     return {
         **found,
+        "outputs": [output],
+        "output": name,
+        "var": var,
         "kind": "dataset",
         "instances": [instance],
         "bytes": record.get("bytes") or 0,
@@ -374,7 +395,8 @@ def _path_stamp(fs, root):
     return ""
 
 
-def resolution(entries, fanned_out, output=None, window=None, storage_options=None):
+def resolution(entries, fanned_out, output=None, window=None, storage_options=None,
+               var=None):
     """What the client needs to draw a set of matched entries.
 
     Every output is listed with whether it can be drawn. A pyramid output is
@@ -382,8 +404,12 @@ def resolution(entries, fanned_out, output=None, window=None, storage_options=No
     one per entry, each placed in time, which is what lets a mapped step be
     laid out before any of it is read.
 
+    A dataset output lists the variables it holds, and one is drawn: `var`,
+    or the one the viewer would choose.
+
     Returns:
-        dict: status, outputs, output, kind, and either store or instances.
+        dict: status, outputs, output, kind, var, and either store or
+        instances.
     """
     first = entries[0]
     names = list(first.meta["outputs"])
@@ -412,10 +438,13 @@ def resolution(entries, fanned_out, output=None, window=None, storage_options=No
         result["store"] = first.artifact(chosen)
         return result
 
+    picked = next(item for item in outputs if item["name"] == chosen)
+    var = _choose_var(picked, var)
+    result["var"] = var
     ordered = sorted(entries, key=lambda e: (e.meta.get("instance_index") or 0))
     if window and fanned_out:
         ordered = _near_window(ordered, window)
-    instances, skipped = index_instances(ordered, chosen, storage_options)
+    instances, skipped = index_instances(ordered, chosen, storage_options, var)
     if window:
         instances = [i for i in instances if _overlaps(i, window)]
     if not instances and skipped:
@@ -426,7 +455,7 @@ def resolution(entries, fanned_out, output=None, window=None, storage_options=No
     return result
 
 
-def index_instances(entries, output, storage_options=None):
+def index_instances(entries, output, storage_options=None, var=None):
     """Place each entry's dataset in time, reading as little as possible.
 
     The first and last ping, the shape, the value variable and the stored size
@@ -454,7 +483,10 @@ def index_instances(entries, output, storage_options=None):
         }
         try:
             record = cached(
-                "index", url, lambda: _index(url, storage_options), named["stamp"]
+                "index",
+                f"{url}#{var}",
+                lambda: _index(url, storage_options, var),
+                named["stamp"],
             )
         except Exception as error:  # noqa: BLE001 - reported per instance
             return {**named, "error": f"{type(error).__name__}: {error}"}
@@ -472,12 +504,12 @@ def stamp_of(entry):
     return f"{entry.meta.get('run_id')}@{entry.meta.get('created_at')}"
 
 
-def _index(url, storage_options):
-    """Time span, shape and size of one dataset."""
+def _index(url, storage_options, var=None):
+    """Time span, shape and size of one variable of a dataset."""
     from . import describe
 
     ds = describe.open_dataset(url, storage_options)
-    var = describe.value_var(ds)
+    var = describe.value_var(ds, var)
     channels, samples = describe.extent(ds, var)
     times = ds["ping_time"].values
     if not len(times):
@@ -552,8 +584,57 @@ def _output_kind(entry, name, storage_options):
             "reason": "a tree of datasets that is not an echogram pyramid",
         }
     if form.startswith("zarr"):
-        return {"name": name, "format": form, "kind": "dataset"}
+        return _dataset_output(
+            name, form, entry.artifact(name), storage_options, stamp_of(entry)
+        )
     return {"name": name, "format": form, "kind": None, "reason": f"format {form!r}"}
+
+
+def _dataset_output(name, form, url, storage_options, stamp):
+    """A dataset output and the variables in it the viewer can draw.
+
+    Read from the store's metadata alone, once per writing of it. For a step
+    fanned out over thousands of files this is the first file's, which every
+    other has the shape of.
+    """
+    from . import describe
+
+    def read():
+        ds = describe.open_dataset(url, storage_options)
+        variables = describe.drawable_variables(ds)
+        default = describe.value_var(ds) if variables else None
+        return {"variables": variables, "default": default}
+
+    try:
+        found = cached("variables", url, read, stamp)
+    except Exception as error:  # noqa: BLE001 - said to the client
+        return {
+            "name": name,
+            "format": form,
+            "kind": None,
+            "reason": f"could not be read: {type(error).__name__}: {error}",
+        }
+    if not found["variables"]:
+        return {
+            "name": name,
+            "format": form,
+            "kind": None,
+            "reason": "no variable along ping_time and a vertical coordinate",
+        }
+    return {"name": name, "format": form, "kind": "dataset", **found}
+
+
+def _choose_var(output, var):
+    """The variable of a dataset output to draw, refusing one it lacks."""
+    names = [item["name"] for item in output.get("variables", [])]
+    if var is None:
+        return output.get("default") or (names[0] if names else None)
+    if var not in names:
+        raise CatalogError(
+            f"{output['name']} has no variable {var!r} to draw; it has "
+            f"{', '.join(names) or 'none'}"
+        )
+    return var
 
 
 def _is_pyramid(url, storage_options):

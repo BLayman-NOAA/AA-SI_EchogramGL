@@ -8,6 +8,7 @@
  */
 
 import type { SourceInput } from '../../app/EchogramView';
+import type { Choice } from './catalog';
 
 /** What a provider may ask of the panel it feeds. */
 export interface ProviderHost {
@@ -67,6 +68,51 @@ export function field(
   if (options.title) label.title = options.title;
   label.append(caption, input);
   return { label, input };
+}
+
+/**
+ * A list of what a found step or path offers, and a button adding the one
+ * selected. Hidden until there is something to choose from.
+ */
+export function chooser(add: (choice: Choice) => void): {
+  element: HTMLElement;
+  offer(offered: Choice[], selected: number): void;
+  clear(): void;
+} {
+  const doc = window.document;
+  const element = doc.createElement('span');
+  const select = doc.createElement('select');
+  select.title = 'An output of the step, and for a dataset the variable in it to draw';
+  const button = doc.createElement('button');
+  button.type = 'button';
+  button.textContent = 'add';
+  element.append(select, button);
+  element.hidden = true;
+  let offered: Choice[] = [];
+  button.addEventListener('click', () => {
+    const choice = offered[select.selectedIndex];
+    if (choice) add(choice);
+  });
+  return {
+    element,
+    offer(next, selected) {
+      offered = next;
+      select.replaceChildren(
+        ...next.map((choice) => {
+          const option = doc.createElement('option');
+          option.textContent = choice.label;
+          return option;
+        }),
+      );
+      select.selectedIndex = selected;
+      element.hidden = false;
+    },
+    clear() {
+      offered = [];
+      select.replaceChildren();
+      element.hidden = true;
+    },
+  };
 }
 
 /** Read and write a provider's remembered fields. Storage that refuses is fine. */

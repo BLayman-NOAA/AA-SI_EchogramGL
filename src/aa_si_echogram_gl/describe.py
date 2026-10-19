@@ -66,12 +66,53 @@ def value_var(ds, name=None):
     for candidate in VALUE_NAMES:
         if candidate in ds.data_vars:
             return candidate
+    drawable = drawable_variables(ds)
+    if drawable:
+        return drawable[0]["name"]
     for candidate, values in ds.data_vars.items():
         if "ping_time" in values.dims and values.ndim >= 2:
             return candidate
     raise geometry.GeometryError(
         "no variable with a ping_time dimension and a vertical one to draw"
     )
+
+
+def drawable_variables(ds):
+    """Every variable of a dataset the viewer can draw, and what each is.
+
+    One that runs along `ping_time` and the vertical coordinate, with at most
+    one more axis, which is read as channels: Sv and MVBS by frequency, a
+    gridded feature set by feature, a cluster label grid with none. A store a
+    clustering step wrote holds several of these side by side.
+
+    Returns:
+        list: `{name, kind, dims, channels, samples}` per variable, in the
+        dataset's order.
+    """
+    try:
+        range_var = geometry.resolve_range_var(ds)
+    except geometry.GeometryError:
+        return []
+    sample_dim = ds[range_var].dims[-1]
+    found = []
+    for name, values in ds.data_vars.items():
+        dims = values.dims
+        if "ping_time" not in dims or sample_dim not in dims:
+            continue
+        if values.ndim not in (2, 3) or values.dtype.kind not in "biuf":
+            continue
+        try:
+            channels, samples = extent(ds, name)
+        except geometry.GeometryError:
+            continue
+        found.append({
+            "name": name,
+            "kind": kind_of(ds, name, range_var),
+            "dims": list(dims),
+            "channels": channels,
+            "samples": samples,
+        })
+    return found
 
 
 def kind_of(ds, var, range_var):

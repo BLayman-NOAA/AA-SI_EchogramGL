@@ -55,7 +55,7 @@ describe('value pass', () => {
     const params = shader.uniforms.find((u) => u.name === 'params');
     const tile = shader.uniforms.find((u) => u.name === 'tile');
     expect(view?.size).toBe(64);
-    expect(params?.size).toBe(32);
+    expect(params?.size).toBe(48);
     // Reported without the rounding the uniform address space applies: a
     // struct there aligns to 16, so the buffer written into is 32.
     expect(tile?.size).toBe(24);
@@ -66,6 +66,7 @@ describe('value pass', () => {
       nodata: 8,
       opacity: 12,
       nodataColor: 16,
+      labelFloor: 32,
     });
     expect(offsetsOf(tile)).toEqual({
       sampleSpan: 0,
