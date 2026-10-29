@@ -17,7 +17,7 @@ import {
   preferred,
   sourceName,
   toSpec,
-} from './catalog';
+} from '../../catalog/resolution';
 import {
   type ProviderHost,
   type SourceProvider,

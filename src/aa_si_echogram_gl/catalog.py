@@ -1,10 +1,11 @@
 """Finding what a recipe step left in a cache.
 
-Two ways in. Recipe mode is the one meant to last: a recipe and a step id
+Three ways in. Recipe mode is the one meant to last: a recipe and a step id
 name a checkpoint, because the recipe's current parameters hash to it, and the
 recipe manager computes that hash without running anything. Cache mode takes
 cache roots and a step id and returns the newest computation of that step, for
-when no recipe is to hand.
+when no recipe is to hand. Artifacts mode takes the records a host already
+found, such as the recipe manager's `step_artifacts`, and only describes them.
 
 A step that is not fanned out has one entry, at `<root>/<step>/<hash[:8]>`. A
 mapped or swept step has one entry per instance, each under its own hash, and
@@ -34,6 +35,10 @@ manager writes it."""
 
 INDEX_THREADS = 16
 
+CACHE_VERSION = 2
+"""Part of every cached record's key. Bumped when what a record holds, or the
+rules that compute it, change, so records written before are missed."""
+
 CONFIG_FILENAME = "aa-recipe.config.yaml"
 CONFIG_ENV = "AA_RECIPE_CONFIG"
 DEFAULT_CACHE_DIR = "recipe_cache"
@@ -45,6 +50,9 @@ UNSUPPORTED = {
     "echodata_zarr": "EchoData, which is raw data; view a step that computes Sv",
     "json": "a value rather than an array",
 }
+
+EMPTY = "empty instance (no data in this file)"
+"""Why an instance saved as JSON `null` is skipped."""
 
 FILE_TIME = re.compile(r"D(\d{8})-T(\d{6})")
 """Start time in an echosounder file name, such as D20160725-T205800.raw."""
@@ -83,7 +91,8 @@ class Entry:
     def artifact(self, output):
         """Location of one of this entry's outputs."""
         path = self.meta["outputs"][output]["path"]
-        if "://" in path or os.path.isabs(path):
+        # An absolute path in either spelling, or a URL, is used as it is.
+        if "://" in path or os.path.isabs(path) or path.startswith("/"):
             return path
         return f"{self.directory}/{path}"
 
@@ -324,6 +333,82 @@ def resolve_cache(roots, step, output=None, window=None, storage_options=None,
     return {**result, "fannedOut": fanned_out, **found}
 
 
+def entries_from_artifacts(records):
+    """Entries built from a host's artifact records, one per entry hash.
+
+    Each record is {output, url, format, tier, step_hash, instance_index,
+    item, created_at, run_id} as aa_recipe_manager.api.step_artifacts
+    reports them; records sharing a step_hash are one entry's outputs. A
+    record may also be an object with `to_dict`.
+
+    Args:
+        records: Artifact records, in any order.
+
+    Returns:
+        list[Entry]: One entry per step hash, in the order first seen. Each
+        output's path is the record's url, so the entry needs no directory.
+    """
+    grouped = {}
+    for record in records:
+        record = record.to_dict() if hasattr(record, "to_dict") else record
+        held = grouped.get(record["step_hash"])
+        if held is None:
+            item = record.get("item")
+            held = grouped[record["step_hash"]] = Entry(
+                record.get("tier") or "",
+                "",
+                {
+                    "step_hash": record["step_hash"],
+                    "outputs": {},
+                    "instance_index": record.get("instance_index"),
+                    "instance_discriminator": (
+                        {"item": item} if item is not None else None
+                    ),
+                    "created_at": record.get("created_at"),
+                    "run_id": record.get("run_id"),
+                },
+            )
+        held.meta["outputs"][record["output"]] = {
+            "path": str(record["url"]),
+            "format": record.get("format") or "",
+        }
+    return list(grouped.values())
+
+
+def resolve_artifacts(records, fanned_out, output=None, window=None,
+                      storage_options=None, var=None, step=None, step_hash=None):
+    """What a host can draw from the artifacts it already found.
+
+    Nothing is searched: the records say where every output is. Everything
+    after that is what the other modes do, so the answer has their shape.
+
+    Args:
+        records: Artifact records; see `entries_from_artifacts`.
+        fanned_out: Whether the step is mapped or swept, one entry per
+            instance.
+        output, window, var: As for `resolve_recipe`.
+        storage_options: fsspec options for reading the artifacts.
+        step: Step id, which names the source the client draws.
+        step_hash: The step's hash, for telling one computation from another.
+
+    Returns:
+        dict: The resolution with `mode` "artifacts", or `status` "not_run"
+        when there are no records; see `resolution`.
+
+    Raises:
+        CatalogError: If `output` or `var` is not there to draw.
+    """
+    result = {"mode": "artifacts", "step": step or "", "fannedOut": bool(fanned_out)}
+    if step_hash:
+        result["stepHash"] = step_hash
+    entries = entries_from_artifacts(records)
+    if not entries:
+        return {**result, "status": "not_run"}
+    entries.sort(key=lambda e: e.meta.get("instance_index") or 0)
+    found = resolution(entries, fanned_out, output, window, storage_options, var)
+    return {**result, **found}
+
+
 def open_path(path, storage_options=None, var=None):
     """What is at a path: a pyramid, or a dataset to draw as one piece.
 
@@ -405,13 +490,15 @@ def resolution(entries, fanned_out, output=None, window=None, storage_options=No
     laid out before any of it is read.
 
     A dataset output lists the variables it holds, and one is drawn: `var`,
-    or the one the viewer would choose.
+    or the one the viewer would choose. The outputs are read from the first
+    entry with the most zarr outputs, since an instance with no data in its
+    file is saved as JSON `null` in place of its dataset.
 
     Returns:
         dict: status, outputs, output, kind, var, and either store or
-        instances.
+        instances with what was skipped and how many of those were empty.
     """
-    first = entries[0]
+    first = max(entries, key=_zarr_outputs)
     names = list(first.meta["outputs"])
     outputs = [_output_kind(first, name, storage_options) for name in names]
     drawable = [item for item in outputs if item["kind"]]
@@ -451,6 +538,7 @@ def resolution(entries, fanned_out, output=None, window=None, storage_options=No
         result["kind"] = None
     result["instances"] = instances
     result["skipped"] = skipped
+    result["empty"] = sum(1 for record in skipped if record.get("empty"))
     result["bytes"] = sum(i.get("bytes") or 0 for i in instances)
     return result
 
@@ -464,23 +552,33 @@ def index_instances(entries, output, storage_options=None, var=None):
     indexed costs nothing the second time.
 
     An instance that cannot be indexed, an empty file or one missing its
-    output, is reported rather than allowed to fail the thousands beside it.
+    output, is reported rather than allowed to fail the thousands beside it,
+    with an empty `store` when it has no such output at all.
+    So is one whose output is not zarr: a mapped step saves an instance with
+    no data in its file as JSON `null`, which is marked `empty`.
 
     Returns:
         tuple: (instances, skipped), each a list of records.
     """
 
     def one(entry):
-        url = entry.artifact(output)
         discriminator = entry.meta.get("instance_discriminator") or {}
         named = {
             "id": entry.meta["step_hash"],
             "item": discriminator.get("item"),
             "index": entry.meta.get("instance_index"),
-            "store": url,
+            "store": "",
             "tier": entry.tier,
             "stamp": stamp_of(entry),
         }
+        if output not in entry.meta["outputs"]:
+            return {**named, "error": f"this instance has no output {output!r}"}
+        url = named["store"] = entry.artifact(output)
+        form = entry.meta["outputs"][output].get("format", "")
+        if not form.startswith("zarr"):
+            if form == "json" and _is_null(url, storage_options):
+                return {**named, "error": EMPTY, "empty": True}
+            return {**named, "error": f"not a zarr dataset ({form or 'no format'})"}
         try:
             record = cached(
                 "index",
@@ -497,6 +595,21 @@ def index_instances(entries, output, storage_options=None, var=None):
     instances = [record for record in records if "error" not in record]
     skipped = [record for record in records if "error" in record]
     return instances, skipped
+
+
+def _zarr_outputs(entry):
+    """How many of an entry's outputs are zarr."""
+    outputs = entry.meta["outputs"].values()
+    return sum(1 for found in outputs if found.get("format", "").startswith("zarr"))
+
+
+def _is_null(url, storage_options):
+    """Whether a JSON output holds `null`, as an instance with no data does."""
+    fs, path = filesystem(url, storage_options)
+    try:
+        return json.loads(fs.cat_file(path)) is None
+    except (OSError, ValueError):
+        return False
 
 
 def stamp_of(entry):
@@ -543,15 +656,17 @@ def cache_dir():
 def cached(kind, url, compute, stamp=""):
     """Return a JSON record for a location, computing it once.
 
-    Keyed by the location and a stamp of when it was written, so a store
-    written again at the same path, as a forced rerun can, is read afresh. The
+    Keyed by the location, a stamp of when it was written and
+    `CACHE_VERSION`, so a store written again at the same path, as a forced
+    rerun can, is read afresh, and so is one this code would describe
+    differently. The
     record is written to a temporary file and moved into place, so a server
     stopped halfway leaves nothing half written, and one that cannot be read
     is computed again. A failure is not recorded.
     """
     import uuid
 
-    key = hashlib.sha1(f"{url}|{stamp}".encode()).hexdigest()
+    key = hashlib.sha1(f"{CACHE_VERSION}|{url}|{stamp}".encode()).hexdigest()
     path = cache_dir() / f"{kind}-{key}.json"
     try:
         return json.loads(path.read_text(encoding="utf-8"))

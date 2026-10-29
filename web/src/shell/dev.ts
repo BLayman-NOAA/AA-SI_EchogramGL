@@ -7,7 +7,7 @@
  * is what an embedding host replaces with its own.
  */
 
-import { createGpuContext, describeContext } from '../device/context';
+import { GpuUnavailableError, createGpuContext, describeContext } from '../device/context';
 import { EchogramPanel } from '../panel/EchogramPanel';
 import { Link, newViewId } from './channel';
 import { popOut, serveHandoff } from './popout';
@@ -22,7 +22,10 @@ if (!root) throw new Error('no element with id app');
 const server = new URL('/', globalThis.location.href).href;
 
 const context = await createGpuContext().catch((error) => {
-  root.textContent = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  const advice = error instanceof GpuUnavailableError ? `\n\n${error.advice}` : '';
+  root.style.whiteSpace = 'pre-wrap';
+  root.textContent = `${message}${advice}`;
   return undefined;
 });
 

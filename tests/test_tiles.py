@@ -5,7 +5,7 @@ import json
 import numcodecs
 import numpy as np
 import pytest
-from test_catalog import write_zarr
+from catalog_fixtures import write_zarr
 
 from aa_si_echogram_gl import fixtures, tiles
 

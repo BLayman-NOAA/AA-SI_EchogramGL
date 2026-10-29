@@ -231,19 +231,13 @@ export class DecodePool {
 }
 
 /**
- * How a host supplies its own worker.
+ * How a host supplies a worker: a DOM `Worker` running the published
+ * `aa-si-echogram-gl/decode-worker`, or anything `WorkerLike`.
  *
- * `new URL('./decodeWorker.ts', import.meta.url)` is resolved by the bundler
- * that compiles it, so the reference below belongs to this project's build and
- * not to a copy of this library sitting inside somebody else's. An embedding
- * application passes its own, written against its own bundler:
- *
- *     spawnWorker: () =>
- *       new Worker(new URL('./echogramDecode.js', import.meta.url), {
- *         type: 'module',
- *       })
+ *     import workerUrl from 'aa-si-echogram-gl/decode-worker?url';
+ *     spawnWorker: () => new Worker(workerUrl, { type: 'module' })
  */
-export type SpawnWorker = () => WorkerLike;
+export type SpawnWorker = () => WorkerLike | Worker;
 
 /**
  * A pool over a worker the caller knows how to start, or nothing.
@@ -271,7 +265,9 @@ export function createDecodePool(
   // perfectly good worker of its own.
   if (!spawn) return undefined;
   try {
-    return new DecodePool({ size, spawn });
+    // A DOM Worker types its message handler more narrowly than WorkerLike
+    // does, and the pool uses only the part WorkerLike names.
+    return new DecodePool({ size, spawn: spawn as () => WorkerLike });
   } catch {
     return undefined;
   }

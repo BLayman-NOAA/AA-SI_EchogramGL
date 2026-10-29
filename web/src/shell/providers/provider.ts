@@ -8,7 +8,7 @@
  */
 
 import type { SourceInput } from '../../app/EchogramView';
-import type { Choice } from './catalog';
+import type { Choice } from '../../catalog/resolution';
 
 /** What a provider may ask of the panel it feeds. */
 export interface ProviderHost {

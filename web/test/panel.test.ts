@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Probe, ProbeLayer, SourceInfo } from '../src/app/EchogramView';
 import { halfToNumber } from '../src/data/values';
+import { layerSignature } from '../src/panel/EchogramPanel';
 import { defaultLayerFor } from '../src/panel/defaults';
 import { duration, formatProbe, utc } from '../src/panel/readout';
 import { readSections, writeSections } from '../src/panel/sections';
@@ -161,5 +162,27 @@ describe('a new source', () => {
       channel: 0,
       color: { colormap: 'inferno' },
     });
+  });
+});
+
+describe('telling a host the layers changed', () => {
+  const stack = [
+    { id: 'a', source: 'dive_sv' },
+    { id: 'b', source: 'dive_file_mvbs' },
+  ];
+
+  it('is the same for the same layers on the same sources', () => {
+    expect(layerSignature(stack)).toBe(layerSignature(stack.map((layer) => ({ ...layer }))));
+    expect(layerSignature([])).toBe('');
+  });
+
+  it('changes when the layers are reordered', () => {
+    expect(layerSignature([...stack].reverse())).not.toBe(layerSignature(stack));
+  });
+
+  it('changes when a layer is removed or reads another source', () => {
+    expect(layerSignature(stack.slice(1))).not.toBe(layerSignature(stack));
+    const moved = [stack[0], { ...stack[1], source: 'dive_sv' }];
+    expect(layerSignature(moved)).not.toBe(layerSignature(stack));
   });
 });

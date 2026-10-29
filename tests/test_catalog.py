@@ -2,9 +2,7 @@
 
 import base64
 import json
-import shutil
 import threading
-import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -12,102 +10,12 @@ from urllib.parse import urlencode
 
 import numpy as np
 import pytest
-import zarr
+from catalog_fixtures import NEW, key, write_entry, write_zarr
 from recipe_ops import FILES, PINGS, file_mvbs
 
-from aa_si_echogram_gl import catalog, describe, fixtures, ops, serve
+from aa_si_echogram_gl import catalog, describe, fixtures, serve
 
-OLD = {"fingerprint": {"params": {"bin_s": 20}}, "parents": [], "epoch": None}
-NEW = {"fingerprint": {"params": {"bin_s": 10}}, "parents": [], "epoch": None}
-
-
-@pytest.fixture(autouse=True)
-def index_dir(tmp_path, monkeypatch):
-    """Keep indexes and headers out of the user's cache."""
-    monkeypatch.setenv("AA_ECHOGRAM_CACHE", str(tmp_path / "index"))
-
-
-def write_entry(root, step, key, output, form, payload, created,
-                instance=None, item=None):
-    """Write a cache entry's sidecar and return its run directory."""
-    directory = root / step / key[: catalog.HASH_PREFIX]
-    directory.mkdir(parents=True)
-    meta = {
-        "step_id": step,
-        "step_hash": key,
-        "run_id": "run1",
-        "created_at": created,
-        "outputs": {output: {"path": f"run1/zarr/{output}.zarr", "format": form}},
-        "fingerprint_payload": payload,
-        "instance_index": instance,
-        "instance_discriminator": {"item": item} if item else None,
-    }
-    (directory / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-    return directory / "run1" / "zarr" / f"{output}.zarr"
-
-
-def key(text):
-    return f"{text:0<64}"
-
-
-def write_zarr(value, path, attempts=5, **options):
-    """Write a store, retrying the rename Windows sometimes refuses.
-
-    zarr writes metadata to a temporary file and renames it into place, and on
-    Windows a scanner holding the new file makes the rename fail with access
-    denied. The recipe manager's own writer retries for the same reason.
-    """
-    for attempt in range(attempts):
-        try:
-            return value.to_zarr(path, zarr_format=2, **options)
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.2 * (attempt + 1))
-
-
-@pytest.fixture(scope="module")
-def template(tmp_path_factory):
-    """A cache holding two computations of a mapped step, a pyramid and a pickle.
-
-    Written once for the module and copied for each test, since writing zarr
-    is the slow part and the part that can be refused.
-    """
-    root = tmp_path_factory.mktemp("template") / "cache"
-    for index, url in enumerate(FILES[:2]):
-        path = write_entry(root, "file_mvbs", key(f"a{index}"), "ds_MVBS", "zarr",
-                           OLD, "2026-01-01T00:00:00", index, url)
-        ds = file_mvbs(url, bin_s=20)
-        write_zarr(ds, path, mode="w", consolidated=True)
-    for index, url in enumerate(FILES):
-        path = write_entry(root, "file_mvbs", key(f"b{index}"), "ds_MVBS", "zarr",
-                           NEW, f"2026-02-0{index + 1}T00:00:00", index, url)
-        ds = file_mvbs(url)
-        write_zarr(ds, path, mode="w", consolidated=True)
-
-    tree = ops.build_echogram_pyramid(
-        fixtures.synthetic(n_pings=32, n_samples=12, gridded=True, gps=False),
-        levels=2,
-        range_var="depth",
-    )
-    path = write_entry(root, "store", key("c"), "pyramid", "zarr_tree",
-                       NEW, "2026-02-01T00:00:00")
-    # Consolidated once at the end, as the checkpoint writer does. Consolidating
-    # per node renames the same file once per level.
-    write_zarr(tree, path, mode="w", consolidated=False)
-    zarr.consolidate_metadata(str(path), zarr_format=2)
-
-    write_entry(root, "model", key("d"), "fit", "pickle", NEW, "2026-02-01T00:00:00")
-    return root
-
-
-@pytest.fixture
-def cache(template, tmp_path):
-    """A copy of the template cache that a test may add to."""
-    root = tmp_path / "cache"
-    shutil.copytree(template, root)
-    return root
-
+pytestmark = pytest.mark.usefixtures("index_dir")
 
 def ns(text):
     return int(np.datetime64(text, "ns").astype("int64"))
@@ -473,6 +381,15 @@ def test_a_record_is_computed_again_for_a_new_writing(tmp_path):
     assert catalog.cached("index", "store", compute, "run2") == {"n": 2}
 
 
+def test_a_record_from_another_version_is_not_used(monkeypatch):
+    current = catalog.CACHE_VERSION
+    monkeypatch.setattr(catalog, "CACHE_VERSION", current - 1)
+    assert catalog.cached("variables", "store", lambda: {"n": "old"}) == {"n": "old"}
+    monkeypatch.setattr(catalog, "CACHE_VERSION", current)
+    assert catalog.cached("variables", "store", lambda: {"n": "new"}) == {"n": "new"}
+    assert len(list(catalog.cache_dir().glob("variables-*.json"))) == 2
+
+
 def test_a_damaged_record_is_computed_again(tmp_path):
     catalog.cached("index", "store", lambda: {"n": 1})
     [path] = list(catalog.cache_dir().glob("index-*.json"))
@@ -516,6 +433,24 @@ def test_a_dataset_opens_by_its_path_as_one_piece(cache):
     assert instance["pings"] == PINGS
     assert instance["start"] == ns("2016-07-25T20:58:00")
     assert instance["stamp"]
+
+
+def test_an_unknown_mount_is_gone_on_describe_too(served):
+    """After a restart: the client resolves again on 410, not on 404."""
+    base, _ = served
+    status, body = fetch(f"{base}/api/describe/0123456789abcdef")
+    assert status == 410
+    assert json.loads(body)["error"] == serve.GONE
+
+
+def test_zarr_metadata_is_served_as_json(served):
+    base, cache = served
+    query = urlencode({"cache": str(cache), "step": "file_mvbs"})
+    mount = json.loads(fetch(f"{base}/api/resolve?{query}")[1])["instances"][0]["mount"]
+    with urllib.request.urlopen(f"{base}/mount/{mount}/Sv/.zarray") as response:
+        assert response.headers["Content-Type"] == "application/json; charset=utf-8"
+    with urllib.request.urlopen(f"{base}/mount/{mount}/Sv/1.0.0") as response:
+        assert response.headers["Content-Type"] == "application/octet-stream"
 
 
 def test_open_answers_over_http(served):
@@ -620,3 +555,181 @@ def test_an_unknown_variable_is_a_bad_request(served, embedded):
     base, cache = served
     query = urlencode({"cache": str(cache), "step": "embed_results", "var": "nope"})
     assert fetch(f"{base}/api/resolve?{query}")[0] == 400
+
+
+def records_of(cache, step, tier="root0", payload=NEW):
+    """Artifact records for one computation, as a host would report them."""
+    entries = catalog.read_entries(catalog.Tier(tier, str(cache)), step)
+    found = []
+    for entry in entries:
+        if entry.meta.get("fingerprint_payload") != payload:
+            continue
+        discriminator = entry.meta.get("instance_discriminator") or {}
+        for output, held in entry.meta["outputs"].items():
+            found.append({
+                "output": output,
+                "url": entry.artifact(output),
+                "format": held["format"],
+                "tier": entry.tier,
+                "step_hash": entry.meta["step_hash"],
+                "instance_index": entry.meta.get("instance_index"),
+                "item": discriminator.get("item"),
+                "created_at": entry.meta.get("created_at"),
+                "run_id": entry.meta.get("run_id"),
+            })
+    return found
+
+
+def test_records_of_one_hash_are_one_entry():
+    record = {
+        "output": "ds_Sv", "url": "C:/cache/sv/abc/run1/zarr/ds_Sv.zarr",
+        "format": "zarr", "tier": "user", "step_hash": "abc",
+        "instance_index": None, "item": None, "created_at": "2026-10-01",
+        "run_id": "run1",
+    }
+    other = {**record, "output": "fit", "url": "C:/cache/sv/abc/fit.pkl",
+             "format": "pickle"}
+    [entry] = catalog.entries_from_artifacts([record, other])
+    assert set(entry.meta["outputs"]) == {"ds_Sv", "fit"}
+    assert entry.artifact("ds_Sv") == record["url"]
+    assert entry.meta["instance_discriminator"] is None
+    assert catalog.stamp_of(entry) == "run1@2026-10-01"
+
+
+def test_a_posix_path_is_used_as_it_is():
+    record = {"output": "o", "url": "/home/me/cache/o.zarr", "format": "zarr",
+              "step_hash": "h"}
+    [entry] = catalog.entries_from_artifacts([record])
+    assert entry.artifact("o") == "/home/me/cache/o.zarr"
+
+
+def test_artifacts_resolve_as_the_cache_does(cache):
+    records = records_of(cache, "file_mvbs")
+    found = catalog.resolve_artifacts(
+        list(reversed(records)), True, step="file_mvbs", step_hash="s1"
+    )
+    assert (found["mode"], found["status"], found["kind"]) == (
+        "artifacts", "found", "dataset"
+    )
+    assert found["fannedOut"]
+    assert (found["step"], found["stepHash"]) == ("file_mvbs", "s1")
+    assert [i["index"] for i in found["instances"]] == [0, 1, 2]
+    assert [i["item"] for i in found["instances"]] == FILES
+    assert found["instances"][0]["start"] == ns("2016-07-25T20:58:00")
+    expected = catalog.resolve_cache([str(cache)], "file_mvbs")
+    assert found["instances"] == expected["instances"]
+    assert found["entries"] == 3
+
+
+def test_a_pyramid_artifact_is_one_store(cache):
+    found = catalog.resolve_artifacts(records_of(cache, "store"), False, step="store")
+    assert found["kind"] == "pyramid"
+    assert found["store"].endswith("pyramid.zarr")
+
+
+def test_no_artifacts_is_not_run():
+    found = catalog.resolve_artifacts([], True, step="sv")
+    assert found == {"mode": "artifacts", "step": "sv", "fannedOut": True,
+                     "status": "not_run"}
+
+
+def test_artifacts_choose_a_variable(embedded):
+    cache, _ = embedded
+    records = records_of(cache, "embed_results")
+    found = catalog.resolve_artifacts(records, False, var=GRID)
+    assert found["var"] == GRID
+    assert found["instances"][0]["channels"] == 1
+    with pytest.raises(catalog.CatalogError, match="no variable"):
+        catalog.resolve_artifacts(records, False, var="nothing")
+
+
+def test_a_pickled_artifact_says_why(cache):
+    found = catalog.resolve_artifacts(records_of(cache, "model"), False)
+    assert found["kind"] is None
+    assert "pickled" in found["outputs"][0]["reason"]
+
+
+def test_mount_resolution_mounts_artifacts(cache):
+    mounts = serve.Mounts([])
+    found = catalog.resolve_artifacts(records_of(cache, "file_mvbs"), True)
+    serve.mount_resolution(found, mounts)
+    assert all(mounts.known(i["mount"]) for i in found["instances"])
+
+
+def test_a_host_allows_roots_as_it_goes(cache):
+    mounts = serve.Mounts([])
+    with pytest.raises(PermissionError):
+        mounts.check([str(cache)])
+    mounts.allow([str(cache)])
+    mounts.allow([str(cache)])
+    mounts.check([str(cache / "file_mvbs")])
+    assert len(mounts.roots) == 1
+    anything = serve.Mounts()
+    anything.allow([str(cache)])
+    assert anything.roots is None
+
+
+def test_a_window_parses_or_is_absent():
+    assert serve.parse_window(None, "") is None
+    assert serve.parse_window("2016-07-25T20:58", None) == (
+        ns("2016-07-25T20:58"), 2**62
+    )
+    with pytest.raises(catalog.CatalogError):
+        serve.parse_window("soon", None)
+
+
+def test_an_empty_instance_is_skipped_and_counted(cache, tmp_path):
+    """A mapped step saves a file with no pings in its window as JSON null."""
+    empty = tmp_path / "dive_sv" / "861fad08" / "run" / "json" / "ds_MVBS.json"
+    empty.parent.mkdir(parents=True)
+    empty.write_text("null", encoding="utf-8")
+    value = tmp_path / "value.json"
+    value.write_text("[1, 2]", encoding="utf-8")
+    records = records_of(cache, "file_mvbs")
+    first = {**records[0], "format": "json", "step_hash": "e" * 64,
+             "instance_index": -1, "url": str(empty).replace("/", "\\")}
+    other = {**first, "step_hash": "f" * 64, "instance_index": 9,
+             "url": str(value)}
+    found = catalog.resolve_artifacts([first, *records, other], True)
+    assert found["kind"] == "dataset"
+    assert len(found["instances"]) == 3
+    assert [s["error"] for s in found["skipped"]] == [
+        "empty instance (no data in this file)",
+        "not a zarr dataset (json)",
+    ]
+    assert found["empty"] == 1
+
+
+def test_an_instance_without_the_output_is_skipped(cache):
+    records = records_of(cache, "file_mvbs")
+    other = {**records[0], "output": "ds_other", "step_hash": "g" * 64,
+             "instance_index": 7}
+    found = catalog.resolve_artifacts([*records, other], True)
+    assert len(found["instances"]) == 3
+    [skipped] = found["skipped"]
+    assert skipped["error"] == "this instance has no output 'ds_MVBS'"
+    assert skipped["store"] == ""
+
+
+def test_a_link_inside_a_root_cannot_reach_outside(tmp_path):
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    link = root / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("this machine does not allow symbolic links")
+    mounts = serve.Mounts([str(root)])
+    mounts.check([str(root / "real")])
+    with pytest.raises(PermissionError):
+        mounts.check([str(link / "anything")])
+
+
+def test_the_vertical_coordinate_is_not_a_choice():
+    ds = fixtures.synthetic(n_pings=6, n_samples=10, gps=False)
+    assert "depth" in ds.data_vars
+    assert [v["name"] for v in describe.drawable_variables(ds)] == ["Sv"]
+    alone = ds[["depth"]]
+    assert [v["name"] for v in describe.drawable_variables(alone)] == ["depth"]

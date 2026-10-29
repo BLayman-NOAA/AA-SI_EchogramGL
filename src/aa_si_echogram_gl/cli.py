@@ -47,7 +47,10 @@ def main(argv=None):
         "--cache-root",
         action="append",
         default=None,
-        help="cache root the catalog may read under, repeatable; any if absent",
+        help=(
+            "folder the catalog may read under: cache roots and, in recipe "
+            "mode, the recipe and its config (repeatable; any folder if absent)"
+        ),
     )
     host.add_argument("--app", default=None, help="directory holding a built app")
     host.add_argument("--host", default="127.0.0.1")

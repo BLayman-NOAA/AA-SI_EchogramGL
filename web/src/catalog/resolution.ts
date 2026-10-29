@@ -1,14 +1,18 @@
 /**
- * What the development server's catalog answers, and how to draw it.
+ * What the catalog server answers, and how to draw it.
  *
- * `aa-echogram serve` finds data for the providers: `/api/resolve` names a
- * recipe step's checkpoint, `/api/open` a store or dataset at a path. Both
- * answer with a `Resolution`, which `toSpec` turns into something the viewer
- * opens. The viewer itself knows none of this.
+ * `aa-echogram serve`, and any host that mounts EchogramGL's router, finds
+ * data: `/api/resolve` names a recipe step's checkpoint, `/api/open` a store
+ * or dataset at a path, and a host such as the recipe manager's client
+ * resolves the artifacts it already found. Each answers with a `Resolution`,
+ * which `toSpec` turns into something the viewer opens.
+ *
+ * Published so a host draws a resolution the way the development page does.
+ * The view itself knows none of this: nothing below this module imports it.
  */
 
-import type { SourceInput } from '../../app/EchogramView';
-import type { PieceSetSpec } from '../../data/pieces';
+import type { SourceInput } from '../app/EchogramView';
+import type { PieceSetSpec } from '../data/pieces';
 
 /** How an output can be drawn. */
 export type OutputKind = 'pyramid' | 'dataset';
@@ -68,9 +72,12 @@ export interface Instance {
   bytes?: number | null;
 }
 
-/** What `/api/resolve` and `/api/open` answer. */
+/**
+ * What `/api/resolve` and `/api/open` answer, and what a host resolving its
+ * own artifacts answers, in mode `artifacts`.
+ */
 export interface Resolution {
-  mode: 'recipe' | 'cache' | 'path';
+  mode: 'recipe' | 'cache' | 'path' | 'artifacts';
   /** The step, or for a path, what the path is called. */
   step: string;
   status: 'found' | 'not_run' | 'never_run';
@@ -87,8 +94,15 @@ export interface Resolution {
   mount?: string;
   /** A dataset output, one per entry, in order. */
   instances?: Instance[];
+  /** Checkpoint entries found: one, or one per instance of a fanned out step. */
+  entries?: number;
   /** Entries that could not be read, such as an empty file, and why. */
-  skipped?: { item?: string | null; store: string; error: string }[];
+  skipped?: { item?: string | null; store: string; error: string; empty?: boolean }[];
+  /**
+   * How many of the skipped were empty: an instance whose file had no data,
+   * saved as JSON null in place of its dataset.
+   */
+  empty?: number;
   bytes?: number;
   /** When the step has not been run with these parameters. */
   nearest?: { tier: string; createdAt?: string; runId?: string; stepHash?: string };
@@ -100,13 +114,16 @@ export interface Resolution {
  *
  * A pyramid is the URL it is mounted at. A dataset output is a piece set,
  * each piece's header and values at the server's mount for it.
+ *
+ * `server` is where the catalog routes are: an absolute URL, or a path on the
+ * page's own origin such as `/echogram/`, which the URLs then stay relative to.
  */
 export function toSpec(server: string, resolution: Resolution): SourceInput {
   if (resolution.status !== 'found' || !resolution.kind) {
     throw new Error(`${resolution.step} has nothing to draw (${resolution.status})`);
   }
   if (resolution.kind === 'pyramid') {
-    return new URL(`mount/${resolution.mount}/`, server).href;
+    return under(server, `mount/${resolution.mount}/`);
   }
   const spec: PieceSetSpec = {
     name: sourceName(resolution),
@@ -119,11 +136,17 @@ export function toSpec(server: string, resolution: Resolution): SourceInput {
       channels: instance.channels,
       samples: instance.samples,
       bytes: instance.bytes,
-      header: new URL(`api/describe/${instance.mount}`, server).href,
-      store: new URL(`mount/${instance.mount}/`, server).href,
+      header: under(server, `api/describe/${instance.mount}`),
+      store: under(server, `mount/${instance.mount}/`),
     })),
   };
   return spec;
+}
+
+/** A route under the catalog server, absolute only when the server is. */
+function under(server: string, path: string): string {
+  if (URL.canParse(server)) return new URL(path, server).href;
+  return `${server.endsWith('/') ? server : `${server}/`}${path}`;
 }
 
 /**
@@ -167,7 +190,8 @@ export function choices(resolution: Resolution): Choice[] {
   return found;
 }
 
-const KINDS: Record<string, string> = { sv: 'Sv', mvbs: 'MVBS', labels: 'labels' };
+/** What each kind of variable is called in a choice's label. */
+export const KINDS: Record<string, string> = { sv: 'Sv', mvbs: 'MVBS', labels: 'labels' };
 
 /**
  * Which choice to select first: the one remembered if it is on offer, else
@@ -192,11 +216,13 @@ export function preferred(
 /** One line saying what was found. */
 export function describeFound(resolution: Resolution): string {
   const count = resolution.instances?.length;
-  const files = count === undefined ? 'a pyramid' : `${count} dataset(s)`;
+  const empty = resolution.empty ? `, ${resolution.empty} empty` : '';
+  const files = count === undefined ? 'a pyramid' : `${count} dataset(s)${empty}`;
   const size = resolution.bytes ? `, ${(resolution.bytes / 2 ** 20).toFixed(0)} MB` : '';
   const written = resolution.createdAt ? `, written ${resolution.createdAt}` : '';
-  const skipped = resolution.skipped?.length
-    ? `; ${resolution.skipped.length} skipped, first: ${resolution.skipped[0].error}`
+  const failed = (resolution.skipped ?? []).filter((record) => !record.empty);
+  const skipped = failed.length
+    ? `; ${failed.length} skipped, first: ${failed[0].error}`
     : '';
   return `${sourceName(resolution)}: ${files}${size}${written}${skipped}`;
 }
@@ -216,4 +242,33 @@ export function sameCheckpoint(a: Resolution, b: Resolution): boolean {
       '|',
     );
   return key(a) === key(b);
+}
+
+/** Say why a resolved step has nothing to draw. */
+export function describeMiss(resolution: Resolution): string {
+  const step = resolution.step;
+  // A host's artifacts are found or not; there is no older run to compare.
+  if (resolution.mode === 'artifacts' && resolution.status !== 'found') {
+    return `${step} has no saved output to draw.`;
+  }
+  if (resolution.status === 'never_run') return `${step} has never been run into this cache.`;
+  if (resolution.status === 'not_run') {
+    const nearest = resolution.nearest?.createdAt
+      ? ` The newest run, ${resolution.nearest.createdAt}, differs in `
+      : ' The newest run differs in ';
+    // A parent's hash says only that something upstream changed, not what.
+    const fields = [
+      ...new Set(
+        (resolution.differences ?? []).map((d) =>
+          d.path.startsWith('parents') ? 'an upstream step' : d.path,
+        ),
+      ),
+    ];
+    const named = fields.length ? fields.slice(0, 4).join(', ') : 'nothing it recorded';
+    return `${step} has not been run with these parameters.${nearest}${named}.`;
+  }
+  const reasons = (resolution.outputs ?? [])
+    .filter((output) => !output.kind)
+    .map((output) => `${output.name}: ${output.reason}`);
+  return `${step} wrote nothing the viewer can draw. ${reasons.join('; ')}`;
 }

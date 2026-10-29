@@ -50,7 +50,11 @@ export {
   type ViewStatistics,
 } from './app/EchogramView';
 
-export { EchogramPanel, type EchogramPanelOptions } from './panel/EchogramPanel';
+export {
+  EchogramPanel,
+  type EchogramPanelOptions,
+  layerSignature,
+} from './panel/EchogramPanel';
 
 export { type Readout, formatProbe } from './panel/readout';
 
@@ -60,6 +64,26 @@ export {
   type PieceSpec,
   isPieceSet,
 } from './data/pieces';
+
+// What the catalog server answers, and how to draw it: a host that resolves
+// data through EchogramGL's router turns each answer into a source with these.
+export {
+  type Choice,
+  type Instance,
+  type Output,
+  type OutputKind,
+  type OutputVariable,
+  type Resolution,
+  KINDS,
+  choices,
+  describeFound,
+  describeMiss,
+  draws,
+  preferred,
+  sameCheckpoint,
+  sourceName,
+  toSpec,
+} from './catalog/resolution';
 
 export {
   type AspectMode,
@@ -100,6 +124,7 @@ export { type AlignmentProblem } from './app/alignment';
 export {
   type DeviceLostHandler,
   type GpuContextOptions,
+  type GpuUnavailableReason,
   GpuContext,
   GpuUnavailableError,
   createGpuContext,

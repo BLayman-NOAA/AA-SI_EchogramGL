@@ -14,7 +14,7 @@ import { createGpuContext, EchogramView } from 'aa-si-echogram-gl';
 
 // Once per page. Holds the device, the pipeline cache, the texture pool and
 // the decoded tile cache, all shared by every view.
-const context = await createGpuContext();
+const context = await createGpuContext();   // see "No WebGPU" below
 
 // Once per panel.
 const view = new EchogramView({ container, context });
@@ -144,14 +144,37 @@ sections instead: `panel.appendTo('display', button)`. `panel.view` is the `Echo
 underneath, for anything the panel does not cover.
 
 The look is scoped under `.egl-panel` and its colors are custom properties,
-so a host matches its own by setting them on the container:
+so a host matches its own by setting them on the container, or on anything
+above it:
 
 ```css
 #echogram { --egl-bar: #202124; --egl-text: #e8eaed; --egl-warning: #fbbc04; }
 ```
 
 The others are `--egl-background`, `--egl-line`, `--egl-muted` and
-`--egl-readout`.
+`--egl-readout`, and `--egl-color-scheme` sets the form controls' scheme
+(`dark` unless set). The panel declares none of them itself; each falls back
+to its dark default where it is used, so whatever the host sets is inherited.
+
+A host that keeps its own list of sources hears of layer changes through
+`onLayersChange`:
+
+```ts
+const panel = new EchogramPanel({
+  container,
+  context,
+  onLayersChange: (layers) => {
+    const read = new Set(layers.map((layer) => layer.source));
+    for (const id of panel.sourceIds) if (!read.has(id)) dropFromMyList(id);
+  },
+});
+```
+
+It is called with the stack whenever a layer is added, removed, reordered or
+pointed at another source, whether the user did it in the panel's own rows or
+the host did through `addSource`, `removeSource` or `applySettings`. Changes of
+color, limits or visibility do not call it. `layerSignature(layers)` is the
+comparison it uses.
 
 ## Supplying data
 
@@ -190,6 +213,59 @@ names a recipe step's checkpoint, `/api/open` a store or dataset at a path,
 and `/api/describe/<mount>` serves the headers. The development page's two
 pickers, under `web/src/shell/providers/`, show both and the small interface
 a picker implements.
+
+### A server of your own
+
+The same routes are a FastAPI router, for a host with a Python server of its
+own (`pip install 'aa-si-echogram-gl[server]'`):
+
+```python
+from aa_si_echogram_gl import catalog, serve
+from aa_si_echogram_gl.server import build_router
+
+mounts = serve.Mounts([])            # reads nothing until a root is allowed
+app.include_router(build_router(mounts), prefix="/echogram")
+
+mounts.allow([user_cache_dir])       # as each session opens
+found = catalog.resolve_artifacts(records, fanned_out, step="dive_sv")
+serve.mount_resolution(found, mounts)   # each instance gains its mount
+```
+
+Roots only grow for the life of the server: there is no way to take one
+back. A local root and every path checked against it are resolved through
+links first, and a recipe or config named on `/api/resolve` is checked as
+well as the caches it names.
+
+`resolve_artifacts` takes the artifact records a host already found, such as
+the recipe manager's `step_artifacts` reports, and answers in the shape
+`/api/resolve` does, with `mode` set to `artifacts`. `mount_resolution` mounts
+what it names under ids that stay the same across resolves. Errors are raised
+as `HTTPException`: a bad request 400, a path outside the allowed folders
+403 ("... is outside the folders this server reads"), nothing there 404, a
+mount the server has not handed out 410, and a read that failed 500 with the
+reason, including a dataset that can no longer be opened. `server.create_app` wraps the router in an application of its
+own, for `uvicorn aa_si_echogram_gl.server.app:create_app --factory`.
+
+### Drawing what the server answered
+
+The answer is a `Resolution`, and the library exports what the development
+page uses to draw one:
+
+```ts
+import { choices, describeMiss, toSpec } from 'aa-si-echogram-gl';
+
+const offered = resolution.status === 'found' ? choices(resolution) : [];
+if (!offered.length) showMessage(describeMiss(resolution));
+else await panel.addSource(id, toSpec('/echogram/', resolution));
+```
+
+`choices` lists every output and variable that can be drawn, `preferred`
+picks the one to select first, `draws` says whether an answer already draws a
+choice or another request is needed, `sourceName` and `describeFound` name and
+describe it, and `sameCheckpoint` tells a rerun from the same data, for a
+refresh that calls `replaceSource` only when something changed. `toSpec` takes
+where the routes are, an absolute URL or a path on the page's origin, and
+returns a pyramid URL or a `PieceSetSpec` with one piece per instance.
 
 `replaceSource(id, input)` swaps a source for newer data in place, keeping
 its layers' place, color and limits and the view where it is. It is what a
@@ -258,25 +334,47 @@ all afternoon leaves the allocation where it started.
 ## The decode worker
 
 Tiles are compressed, and inflating them on the main thread costs frames during
-a pan. The viewer will use a worker if you give it one:
+a pan. The viewer will use a worker if you give it one. The package publishes
+one, built as a single self contained module, at
+`aa-si-echogram-gl/decode-worker`. Under Vite:
 
 ```ts
+import workerUrl from 'aa-si-echogram-gl/decode-worker?url';
+
 new EchogramView({
   container,
   context,
-  spawnWorker: () =>
-    new Worker(new URL('./echogramDecode.js', import.meta.url), { type: 'module' }),
+  spawnWorker: () => new Worker(workerUrl, { type: 'module' }),
 });
 ```
+
+`spawnWorker` takes a DOM `Worker` as it is, or anything `WorkerLike`.
+Another bundler copies `dist/decode-worker.js` as an asset its own way and
+passes its URL the same.
 
 There is no default, deliberately. `new URL(..., import.meta.url)` is resolved
 by whichever bundler compiles the line it appears in, so a default inside the
 library would be a path that is right for this project's build and wrong inside
 yours. It would also pull the worker and the two decompressors it carries, more
-than a megabyte, into a bundle where you cannot use them.
+than a megabyte, into the main bundle.
 
 Leave it out and tiles decode on the main thread. That is slower and completely
 correct.
+
+## No WebGPU
+
+`createGpuContext` rejects with a `GpuUnavailableError` when there is no device
+to be had. Its `reason` is `insecure-context` (no `navigator.gpu`, as on a plain
+http address other than localhost), `no-adapter` (the browser or machine offers
+none) or `no-device` (the adapter refused). `message` says what failed and
+`advice` what the user can do, in words a host can show as they are:
+
+```ts
+const context = await createGpuContext().catch((error) => {
+  if (!(error instanceof GpuUnavailableError)) throw error;
+  pane.textContent = `${error.message} ${error.advice}`;
+});
+```
 
 ## Saving and restoring a panel
 
@@ -311,11 +409,14 @@ const a = new EchogramView({ container: left, context, onViewChange: () => {
 ## Building it
 
 ```
-npm run build:lib     # dist/aa-si-echogram-gl.js + dist/types/
+npm run build:lib     # dist/aa-si-echogram-gl.js, dist/decode-worker.js, dist/types/
+npm pack              # aa-si-echogram-gl-<version>.tgz, for a host to install
 ```
 
+The package holds `dist` alone, without source maps.
+
 ESM only. `zarrita` is a peer dependency so your application resolves one copy
-of it.
+of it; the worker carries its own, since it cannot share yours.
 
 ## Versions
 

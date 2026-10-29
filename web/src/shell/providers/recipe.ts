@@ -17,12 +17,13 @@ import {
   type Resolution,
   choices,
   describeFound,
+  describeMiss,
   draws,
   preferred,
   sameCheckpoint,
   sourceName,
   toSpec,
-} from './catalog';
+} from '../../catalog/resolution';
 import {
   type ProviderHost,
   type SourceProvider,
@@ -73,31 +74,6 @@ export function resolveUrl(server: string, query: StepQuery): string {
   if (query.output) params.set('output', query.output);
   if (query.var) params.set('var', query.var);
   return new URL(`api/resolve?${params}`, server).href;
-}
-
-/** Say why a resolved step has nothing to draw. */
-export function describeMiss(resolution: Resolution): string {
-  const step = resolution.step;
-  if (resolution.status === 'never_run') return `${step} has never been run into this cache.`;
-  if (resolution.status === 'not_run') {
-    const nearest = resolution.nearest?.createdAt
-      ? ` The newest run, ${resolution.nearest.createdAt}, differs in `
-      : ' The newest run differs in ';
-    // A parent's hash says only that something upstream changed, not what.
-    const fields = [
-      ...new Set(
-        (resolution.differences ?? []).map((d) =>
-          d.path.startsWith('parents') ? 'an upstream step' : d.path,
-        ),
-      ),
-    ];
-    const named = fields.length ? fields.slice(0, 4).join(', ') : 'nothing it recorded';
-    return `${step} has not been run with these parameters.${nearest}${named}.`;
-  }
-  const reasons = (resolution.outputs ?? [])
-    .filter((output) => !output.kind)
-    .map((output) => `${output.name}: ${output.reason}`);
-  return `${step} wrote nothing the viewer can draw. ${reasons.join('; ')}`;
 }
 
 /** The recipe and cache picker, resolving through the server at `server`. */

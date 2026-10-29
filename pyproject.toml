@@ -23,6 +23,14 @@ dev = [
     "pytest-cov",
     "ruff",
     "matplotlib",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+]
+
+# The catalog and data routes as a router another FastAPI server mounts, as
+# the recipe manager's client does. `aa-echogram serve` does not need it.
+server = [
+    "fastapi>=0.115",
 ]
 
 colormaps = [

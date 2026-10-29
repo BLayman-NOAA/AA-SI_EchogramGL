@@ -17,11 +17,53 @@ import { PipelineCache } from './pipelines';
 import type { TexturePool } from './texturePool';
 import { createValuePool } from './textures';
 
+/**
+ * Why there is no GPU device: the page is not a secure context, the browser
+ * or machine offers no adapter, or the adapter would not give a device.
+ */
+export type GpuUnavailableReason = 'insecure-context' | 'no-adapter' | 'no-device';
+
+/** What a user can do about each reason, in words a host can show as they are. */
+const ADVICE: Record<GpuUnavailableReason, string> = {
+  'insecure-context':
+    'Open the page at http://localhost or https; WebGPU is off on a plain http ' +
+    'address.',
+  'no-adapter':
+    'This browser or machine has no WebGPU adapter. Current Chrome or Edge on a ' +
+    'machine with a GPU is needed; the rest of the application works without it.',
+  'no-device':
+    'The GPU adapter would not provide a device. Close other GPU heavy tabs or ' +
+    'restart the browser, and update the graphics driver if it persists.',
+};
+
+/**
+ * No WebGPU device could be had.
+ *
+ * `message` says what failed and `advice` what to do about it, so a host
+ * can show both without knowing the reasons itself.
+ */
 export class GpuUnavailableError extends Error {
-  constructor(message: string) {
+  readonly reason: GpuUnavailableReason;
+  readonly advice: string;
+
+  constructor(message: string, reason: GpuUnavailableReason, advice = ADVICE[reason]) {
     super(message);
     this.name = 'GpuUnavailableError';
+    this.reason = reason;
+    this.advice = advice;
   }
+}
+
+/** The error each way of failing to get a device throws. */
+export function unavailable(reason: GpuUnavailableReason, detail?: string): GpuUnavailableError {
+  const messages: Record<GpuUnavailableReason, string> = {
+    'insecure-context':
+      'navigator.gpu is undefined. WebGPU needs a secure context, so use ' +
+      'https or http://localhost rather than a bare hostname.',
+    'no-adapter': 'requestAdapter returned null: no WebGPU adapter.',
+    'no-device': `requestDevice failed${detail ? `: ${detail}` : '.'}`,
+  };
+  return new GpuUnavailableError(messages[reason], reason);
 }
 
 /** Called after the device was replaced, or with the error if it could not be. */
@@ -139,18 +181,11 @@ export async function createGpuContext(
 }
 
 async function requestAdapter(options: GpuContextOptions): Promise<GPUAdapter> {
-  if (!('gpu' in navigator) || !navigator.gpu) {
-    throw new GpuUnavailableError(
-      'navigator.gpu is undefined. WebGPU needs a secure context, so use ' +
-        'https or http://localhost rather than a bare hostname.',
-    );
-  }
+  if (!('gpu' in navigator) || !navigator.gpu) throw unavailable('insecure-context');
   const adapter = await navigator.gpu.requestAdapter({
     powerPreference: options.powerPreference ?? 'high-performance',
   });
-  if (!adapter) {
-    throw new GpuUnavailableError('requestAdapter returned null: no WebGPU adapter.');
-  }
+  if (!adapter) throw unavailable('no-adapter');
   return adapter;
 }
 
@@ -158,9 +193,13 @@ async function requestDevice(
   adapter: GPUAdapter,
   options: GpuContextOptions,
 ): Promise<GPUDevice> {
-  return adapter.requestDevice({
-    requiredFeatures: options.requiredFeatures ?? [],
-  });
+  try {
+    return await adapter.requestDevice({
+      requiredFeatures: options.requiredFeatures ?? [],
+    });
+  } catch (error) {
+    throw unavailable('no-device', error instanceof Error ? error.message : String(error));
+  }
 }
 
 /** Adapter facts worth recording, since they constrain tile sizing. */

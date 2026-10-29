@@ -21,6 +21,10 @@ or dataset named by its path. Each dataset it names is mounted under a
 stable id, served under `/mount/<id>/`, and described under
 `/api/describe/<id>`. The browser cannot list a bucket, so this is the part
 that has to live on the server.
+
+The same routes are offered to a FastAPI host by `server.build_router`, over
+the same `Mounts` and the same request functions. This module stays on the
+standard library, so `aa-echogram serve` needs nothing more.
 """
 
 import hashlib
@@ -54,6 +58,15 @@ CONTENT_TYPES = {
 """Declared rather than guessed. On Windows mimetypes reads the registry, where
 .js can be mapped to text/plain, and a module script served as text/plain is
 refused by the browser."""
+
+METADATA_KEYS = {".zarray", ".zattrs", ".zgroup", ".zmetadata", "zarr.json"}
+"""Zarr metadata objects, which are JSON whatever their names say."""
+
+GONE = "unknown mount; resolve the step again"
+
+
+class UnknownMount(LookupError):
+    """A mount this server has not handed out, as after a restart: 410."""
 
 
 def make_handler(store_root=None, app_root=None, mounts=None):
@@ -98,7 +111,7 @@ def make_handler(store_root=None, app_root=None, mounts=None):
             mount = request[len(MOUNT_PREFIX):].partition("/")[0]
             if request.startswith(MOUNT_PREFIX) and not mounts.known(mount):
                 self._refuse(
-                    HTTPStatus.GONE, "unknown mount; resolve the step again", started
+                    HTTPStatus.GONE, GONE, started
                 )
                 return
             try:
@@ -107,7 +120,8 @@ def make_handler(store_root=None, app_root=None, mounts=None):
                 # A read that raises would otherwise end this thread with a
                 # traceback and no response, which the browser reports as a
                 # bare failed fetch. A 500 carries the reason to the page.
-                self._refuse(HTTPStatus.INTERNAL_SERVER_ERROR, _reason(error), started)
+                status = HTTPStatus.INTERNAL_SERVER_ERROR
+                self._refuse(status, reason_line(error), started)
                 return
             if found is None or found[1] is None:
                 self._refuse(HTTPStatus.NOT_FOUND, None, started)
@@ -164,15 +178,11 @@ def make_handler(store_root=None, app_root=None, mounts=None):
                 else:
                     raise LookupError(f"no route {request}")
                 status = HTTPStatus.OK
-            except catalog.CatalogError as error:
-                status, payload = HTTPStatus.BAD_REQUEST, {"error": str(error)}
-            except PermissionError as error:
-                status, payload = HTTPStatus.FORBIDDEN, {"error": str(error)}
-            except LookupError as error:
-                status, payload = HTTPStatus.NOT_FOUND, {"error": str(error)}
             except Exception as error:  # noqa: BLE001 - reported to the page
-                status = HTTPStatus.INTERNAL_SERVER_ERROR
-                payload = {"error": f"{type(error).__name__}: {error}"}
+                status, message = status_of(error)
+                if status == HTTPStatus.FORBIDDEN:
+                    message += "; start aa-echogram serve with --cache-root for it"
+                payload = {"error": message}
             body = json.dumps(payload).encode("utf-8")
             try:
                 self.send_response(status)
@@ -192,19 +202,19 @@ def make_handler(store_root=None, app_root=None, mounts=None):
             if request.startswith(MOUNT_PREFIX):
                 mount, _, key = request[len(MOUNT_PREFIX):].partition("/")
                 source = mounts.source(mount)
-                if source is None or not _safe(key):
+                if source is None or not safe_key(key):
                     return None
                 return key, source.read(key)
             if request.startswith(STORE_PREFIX):
                 key = request[len(STORE_PREFIX):]
-                if store is None or not _safe(key):
+                if store is None or not safe_key(key):
                     return None
                 return key, store.read(key)
             if app_root is None:
                 return None
             if request in ("", "/"):
                 request = "/index.html"
-            path = _under(app_root, request.lstrip("/"))
+            path = under(app_root, request.lstrip("/"))
             if path is None:
                 return None
             try:
@@ -225,7 +235,10 @@ def content_type(path):
     Returns:
         str: Media type.
     """
-    extension = os.path.splitext(path)[1].lower()
+    name = str(path).replace("\\", "/").rsplit("/", 1)[-1]
+    if name in METADATA_KEYS:
+        return "application/json; charset=utf-8"
+    extension = os.path.splitext(name)[1].lower()
     return CONTENT_TYPES.get(extension, "application/octet-stream")
 
 
@@ -237,7 +250,7 @@ class DirectorySource:
 
     def read(self, key):
         """Return the bytes of one object, or None if there is no such file."""
-        path = _under(self.root, key)
+        path = under(self.root, key)
         if path is None:
             return None
         try:
@@ -311,14 +324,15 @@ class Mounts:
     The id is a digest of the dataset's location, so refreshing a source that
     still names the same checkpoint keeps the same URL, and the browser's and
     the viewer's caches stay valid. An id this server has not handed out is a
-    404: a restarted server learns its mounts again from the next resolve.
+    410: a restarted server learns its mounts again from the next resolve.
 
     Args:
-        roots: Cache roots a request may read under, or None for any.
+        roots: Cache roots a request may read under, or None for any. An
+            empty list allows none until `allow` adds some.
     """
 
     def __init__(self, roots=None):
-        self.roots = [_normalise(root) for root in roots] if roots else None
+        self.roots = None if roots is None else [_normalise(root) for root in roots]
         self.found = {}
         self.sources = {}
 
@@ -359,7 +373,7 @@ class Mounts:
     def describe(self, mount):
         """The viewer's header for a mounted dataset."""
         if mount not in self.found:
-            raise LookupError(f"no mount {mount}; resolve the step again")
+            raise UnknownMount(GONE)
         url, options, _, stamp, var = self.found[mount]
         return catalog.cached(
             "describe",
@@ -368,26 +382,47 @@ class Mounts:
             stamp,
         )
 
+    def allow(self, roots):
+        """Add cache roots a request may read under.
+
+        A host adds the folders a session may read as sessions open. A set
+        built to allow any root is left as it is.
+
+        Args:
+            roots: Directories or URLs.
+        """
+        if self.roots is None:
+            return
+        for root in roots:
+            wanted = _normalise(root)
+            if wanted not in self.roots:
+                self.roots.append(wanted)
+
     def check(self, roots):
-        """Refuse cache roots outside the ones this server was started with."""
+        """Refuse paths outside the folders this server reads."""
         if self.roots is None:
             return
         for root in roots:
             wanted = _normalise(root)
             if not any(wanted == r or wanted.startswith(r + "/") for r in self.roots):
                 raise PermissionError(
-                    f"{root} is outside the cache roots this server reads; "
-                    f"start it with --cache-root {root}"
+                    f"{root} is outside the folders this server reads"
                 )
 
 
-def resolve_request(query, mounts):
+def resolve_request(query, mounts, storage_options=None):
     """Answer `/api/resolve`.
 
     Recipe mode takes `recipe` and `step`, with optional repeated
     `input=NAME=VALUE`, `config`, `user_cache` and `survey_cache`. Cache mode
     takes repeated `cache` roots and `step`. Both take `output`, and `start` and
     `end` as ISO times or nanoseconds, which limit a mapped step to a window.
+
+    Args:
+        query: Query parameters, each a list of values.
+        mounts: Mounts to add what is found to.
+        storage_options: fsspec options for cache roots; a recipe's run
+            config supplies its own.
     """
 
     def one(name):
@@ -397,12 +432,12 @@ def resolve_request(query, mounts):
     step = one("step")
     if not step:
         raise catalog.CatalogError("name a step")
-    window = None
-    if one("start") or one("end"):
-        window = (_nanoseconds(one("start"), -(2**62)), _nanoseconds(one("end"), 2**62))
+    window = parse_window(one("start"), one("end"))
 
     recipe = one("recipe")
     if recipe:
+        # Reading the recipe and its config is itself a read.
+        mounts.check(path for path in (recipe, one("config")) if path)
         inputs = {}
         for item in query.get("input", []):
             name, found, value = item.partition("=")
@@ -421,35 +456,53 @@ def resolve_request(query, mounts):
         if not roots:
             raise catalog.CatalogError("name a recipe, or one or more cache roots")
         mounts.check(roots)
-        options = None
+        options = storage_options
         result = catalog.resolve_cache(
-            roots, step, one("output"), window, var=one("var")
+            roots, step, one("output"), window, options, var=one("var")
         )
 
-    return _mount(result, mounts, options)
+    return mount_resolution(result, mounts, options)
 
 
-def open_request(query, mounts):
+def open_request(query, mounts, storage_options=None):
     """Answer `/api/open`: what is at a path the server reads.
 
     Takes `path`, a directory or a `gs://` URL. Answers as `/api/resolve`
     does, with a pyramid mounted as it is or a dataset mounted as one piece.
+
+    Args:
+        query: Query parameters, each a list of values.
+        mounts: Mounts to add what is found to.
+        storage_options: fsspec options for a URL.
     """
     path = (query.get("path") or [""])[0].strip()
     if not path:
         raise catalog.CatalogError("name a path")
     mounts.check([path])
-    return _mount(catalog.open_path(path, var=one_of(query, "var")), mounts, None)
+    found = catalog.open_path(path, storage_options, var=one_of(query, "var"))
+    return mount_resolution(found, mounts, storage_options)
 
 
-def _mount(result, mounts, options):
-    """Mount what a resolution names, and say where each is served."""
+def mount_resolution(result, mounts, storage_options=None):
+    """Mount what a resolution names, and say where each is served.
+
+    A pyramid gains `mount`, and each dataset instance gains its own.
+
+    Args:
+        result: A resolution, as `catalog.resolution` and the resolvers
+            return it. Changed in place.
+        mounts: Mounts to add to.
+        storage_options: fsspec options for reading what is mounted.
+
+    Returns:
+        dict: The same resolution.
+    """
     if result.get("store"):
-        result["mount"] = mounts.add(result["store"], options)
+        result["mount"] = mounts.add(result["store"], storage_options)
     for instance in result.get("instances", []):
         instance["mount"] = mounts.add(
             instance["store"],
-            options,
+            storage_options,
             tiled=True,
             stamp=instance["stamp"],
             var=instance.get("var"),
@@ -457,10 +510,51 @@ def _mount(result, mounts, options):
     return result
 
 
+def status_of(error):
+    """The HTTP status a catalog error answers with, and its message.
+
+    Args:
+        error: What a request raised.
+
+    Returns:
+        tuple: (HTTPStatus, str). A request the catalog cannot answer is 400,
+        a root not allowed 403, nothing there 404, a mount not handed out 410,
+        and anything else a 500 whose message is one line.
+    """
+    if isinstance(error, UnknownMount):
+        return HTTPStatus.GONE, str(error)
+    if isinstance(error, catalog.CatalogError):
+        return HTTPStatus.BAD_REQUEST, str(error)
+    if isinstance(error, PermissionError):
+        return HTTPStatus.FORBIDDEN, str(error)
+    if isinstance(error, LookupError):
+        return HTTPStatus.NOT_FOUND, str(error)
+    return HTTPStatus.INTERNAL_SERVER_ERROR, reason_line(error)
+
+
 def one_of(query, name):
     """The first value of a query parameter, or None."""
     values = query.get(name)
     return values[0] if values else None
+
+
+def parse_window(start=None, end=None):
+    """A time window from two optional ISO times or nanosecond counts.
+
+    Args:
+        start: Start of the window, or None or empty for open.
+        end: End of the window, or None or empty for open.
+
+    Returns:
+        tuple | None: (start, end) in nanoseconds since 1970, or None when
+        neither is given.
+
+    Raises:
+        CatalogError: If either is not a time.
+    """
+    if not start and not end:
+        return None
+    return (_nanoseconds(start, -(2**62)), _nanoseconds(end, 2**62))
 
 
 def _nanoseconds(value, default):
@@ -476,14 +570,18 @@ def _nanoseconds(value, default):
 
 
 def _normalise(root):
-    """A root for prefix comparison: forward slashes, no trailing slash."""
+    """A root for prefix comparison: forward slashes, no trailing slash.
+
+    A local path is resolved through any links, so a link inside a root
+    cannot name something outside it.
+    """
     text = str(root).replace("\\", "/").rstrip("/")
     if "://" in text:
         return text
-    return os.path.normcase(os.path.abspath(text)).replace("\\", "/")
+    return os.path.normcase(os.path.realpath(text)).replace("\\", "/")
 
 
-def _reason(error):
+def reason_line(error):
     """An exception as a status line reason: one line, short."""
     text = f"{type(error).__name__}: {error}".replace("\r", " ").replace("\n", " ")
     return text[:300]
@@ -502,13 +600,13 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
-def _safe(key):
+def safe_key(key):
     """Whether a request key stays inside the store it is addressed to."""
     parts = [p for p in posixpath.normpath(key).split("/") if p not in ("", ".")]
     return not any(p == ".." for p in parts)
 
 
-def _under(root, relative):
+def under(root, relative):
     """Resolve a relative path under a root, refusing anything that escapes it.
 
     Args:

@@ -15,17 +15,19 @@ import { defineConfig } from 'vite';
  * here would put a second zarr runtime in any application that already reads
  * zarr, which is most of the ones likely to want this.
  *
- * The decode worker is deliberately not an entry. `new URL(..., import.meta.url)`
- * resolves against the build that compiles it, so a worker emitted here would
- * be looked for at a path that only exists in this project's own output. A host
- * that wants one passes `spawnWorker` and builds it with its own bundler; a
- * host that does not gets main thread decoding, which is slower and correct.
+ * The decode worker is not an entry. `new URL(..., import.meta.url)` resolves
+ * against the build that compiles it, so a worker emitted here would be looked
+ * for at a path that only exists in this project's own output. It is built on
+ * its own by vite.worker.config.ts and published as
+ * `aa-si-echogram-gl/decode-worker`, which a host spawns by its own URL for it
+ * and passes as `spawnWorker`; a host that does not gets main thread decoding,
+ * which is slower and correct.
  */
 export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: false,
     lib: {
       entry: resolve(import.meta.dirname, 'src/index.ts'),
       formats: ['es'],

@@ -19,6 +19,10 @@ VALUE_NAMES = ("Sv_corrected", "Sv_Corrected", "Sv", "_da")
 """Variables looked for, best first. `_da` is what the recipe manager names a
 checkpointed DataArray."""
 
+VERTICAL_NAMES = ("depth", "echo_range")
+"""Vertical coordinates, which a dataset may store as variables, as geometry
+resolves them."""
+
 LABEL_HINTS = ("label", "cluster")
 
 TILE = {"channel": 1, "ping": 2048, "sample": 1024}
@@ -83,7 +87,9 @@ def drawable_variables(ds):
     One that runs along `ping_time` and the vertical coordinate, with at most
     one more axis, which is read as channels: Sv and MVBS by frequency, a
     gridded feature set by feature, a cluster label grid with none. A store a
-    clustering step wrote holds several of these side by side.
+    clustering step wrote holds several of these side by side. The vertical
+    coordinate itself, stored as a variable, is left out unless it is all
+    there is.
 
     Returns:
         list: `{name, kind, dims, channels, samples}` per variable, in the
@@ -112,7 +118,8 @@ def drawable_variables(ds):
             "channels": channels,
             "samples": samples,
         })
-    return found
+    values = [item for item in found if item["name"] not in VERTICAL_NAMES]
+    return values or found
 
 
 def kind_of(ds, var, range_var):

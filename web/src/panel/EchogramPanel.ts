@@ -22,6 +22,7 @@ import {
   EchogramView,
 } from '../app/EchogramView';
 import { channelOptions } from '../app/channels';
+import type { Layer } from '../app/layers';
 import type { ViewSettings } from '../app/settings';
 import { PIXELS_PER_PING } from '../geometry/levels';
 import { colormapNames } from '../render/colormaps';
@@ -45,6 +46,13 @@ export interface EchogramPanelOptions
   onError?: (error: unknown) => void;
   /** Called when the view moves or settles, as `EchogramView` calls it. */
   onViewChange?: () => void;
+  /**
+   * Called with the layer stack whenever a layer is added or removed, or
+   * moves to another source, from the panel's own rows or through the host.
+   * A host that lists sources uses it to drop a source whose last layer the
+   * user removed.
+   */
+  onLayersChange?: (layers: Layer[]) => void;
   /** Where to remember which sections are open. Absent remembers nothing. */
   storageKey?: string;
   /** Sections open when nothing is remembered. Layers alone by default. */
@@ -75,6 +83,9 @@ export class EchogramPanel {
   private shown: string[] = [];
   private onError?: (error: unknown) => void;
   private onViewChange?: () => void;
+  private onLayersChange?: (layers: Layer[]) => void;
+  /** The stack last reported to `onLayersChange`, as `layerSignature` gives it. */
+  private reported = '';
 
   private layers: LayerControls;
   private axes: AxisControls;
@@ -91,6 +102,7 @@ export class EchogramPanel {
     injectStyles();
     this.onError = options.onError;
     this.onViewChange = options.onViewChange;
+    this.onLayersChange = options.onLayersChange;
     this.storageKey = options.storageKey;
     this.state = options.storageKey
       ? readSections(storage(), options.storageKey)
@@ -431,10 +443,19 @@ export class EchogramPanel {
       channels: channelOptions(source),
     }));
     this.layers.update(sources);
+    this.reportLayers(info.layers);
     this.axes.update(info);
     this.aspect.update(info);
     this.bounds.update(info);
     if (!this.readoutHeld) this.showReadout(undefined);
+  }
+
+  /** Tell the host of a changed layer stack, once per change. */
+  private reportLayers(layers: Layer[]) {
+    const signature = layerSignature(layers);
+    if (signature === this.reported) return;
+    this.reported = signature;
+    this.onLayersChange?.(layers);
   }
 
   /** Whether the readout is showing a probe, which notes must not replace. */
@@ -466,6 +487,15 @@ export class EchogramPanel {
       box.append(line);
     }
   }
+}
+
+/**
+ * Which layers there are and what each reads, in stack order: what a host
+ * listening for layer changes cares about. Colors, limits and visibility are
+ * left out, so changing them does not count as a change.
+ */
+export function layerSignature(layers: Pick<Layer, 'id' | 'source'>[]): string {
+  return layers.map((layer) => `${layer.id}:${layer.source ?? ''}`).join('|');
 }
 
 /**

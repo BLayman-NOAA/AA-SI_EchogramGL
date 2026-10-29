@@ -5,7 +5,9 @@
  *
  * The panel sits between the two: it may use the core, the core may not use
  * it, and it may not use the shell, since it is published and the shell is
- * not.
+ * not. The catalog module, what a server's resolution means, is published
+ * beside the core: it may use the core's types, and neither the panel nor the
+ * shell.
  */
 module.exports = {
   forbidden: [
@@ -17,14 +19,14 @@ module.exports = {
       // every application that embeds this, which is the same failure the rule
       // exists to prevent and the one place it would not otherwise look.
       comment: 'Only shell/ may import shell/.',
-      from: { path: '^src/(index\\.ts|(app|compute|data|device|geometry|panel|render)/)' },
+      from: { path: '^src/(index\\.ts|(app|catalog|compute|data|device|geometry|panel|render)/)' },
       to: { path: '^src/shell/' },
     },
     {
       name: 'no-panel-in-core',
       severity: 'error',
       comment: 'The core draws; only the panel and above may build controls on it.',
-      from: { path: '^src/(app|compute|data|device|geometry|render)/' },
+      from: { path: '^src/(app|catalog|compute|data|device|geometry|render)/' },
       to: { path: '^src/panel/' },
     },
     {

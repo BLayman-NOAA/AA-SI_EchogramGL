@@ -22,6 +22,8 @@ src/aa_si_echogram_gl/
   pyramid.py     build_pyramid(), the plain function over a Dataset
   colormaps.py   matplotlib colormap export for the web build
   serve.py       development server for a store and the built app
+  catalog.py     finding what a recipe step left in a cache
+  server/        the catalog and data routes as a FastAPI router
   fixtures.py    synthetic datasets with known geometry
   cli.py         aa-echogram build / validate / serve / colormaps
   static/        the built web bundle, written by the vite build
@@ -31,6 +33,7 @@ web/
   src/data/      store implementations and zarr access
   src/render/    colormaps, WGSL passes, layer draw
   src/app/       EchogramView
+  src/catalog/   what the catalog server answers, and how to draw it
   src/shell/     development page
   test/          vitest
 ```
@@ -80,6 +83,12 @@ store is served somewhere other than `http://127.0.0.1:8000`.
 
 `npm run build` writes the bundle into `src/aa_si_echogram_gl/static/`, which
 `aa-echogram serve --app` can then host alongside the store from one port.
+
+`--cache-root`, repeatable, names a folder the catalog may read under: the
+cache roots, and in recipe mode the recipe and its config too. Without it the
+catalog reads any folder. With it, a recipe or config outside every named
+folder is refused with a 403, so name the recipe's folder as well as its
+caches.
 
 ## Colormaps
 

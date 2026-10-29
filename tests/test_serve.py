@@ -61,8 +61,14 @@ def test_declares_content_types_rather_than_guessing():
     and a module script served as text/plain is refused by the browser."""
     assert serve.content_type("assets/index-abc.js") == "text/javascript"
     assert serve.content_type("index.html") == "text/html"
-    assert serve.content_type("zarr.json") == "application/json"
+    assert serve.content_type("data.json") == "application/json"
     assert serve.content_type("0/Sv/c/0/0/0") == "application/octet-stream"
+
+
+def test_zarr_metadata_is_json():
+    for key in ("zarr.json", "Sv/.zarray", "Sv/.zattrs", ".zgroup", ".zmetadata"):
+        assert serve.content_type(key) == "application/json; charset=utf-8"
+    assert serve.content_type("Sv/0.0.0") == "application/octet-stream"
 
 
 def test_missing_key_is_404(served):
@@ -251,7 +257,8 @@ def test_an_object_store_is_served_over_http(tmp_path):
     try:
         with urllib.request.urlopen(f"{origin}/store/zarr.json") as response:
             assert response.status == 200
-            assert response.headers["Content-Type"] == "application/json"
+            content = response.headers["Content-Type"]
+            assert content == "application/json; charset=utf-8"
             assert response.read() == b'{"ok": true}'
         with urllib.request.urlopen(f"{origin}/store/0/Sv/c/0/0/0") as response:
             assert response.read() == b"\x01\x02"

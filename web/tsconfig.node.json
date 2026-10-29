@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["@webgpu/types", "vite/client", "node"]
   },
-  "include": ["test", "vite.config.ts", "src"]
+  "include": ["test", "vite.config.ts", "vite.lib.config.ts", "vite.worker.config.ts", "src"]
 }
